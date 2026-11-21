@@ -58,7 +58,9 @@ def ensure_sentencepiece_tools_and_wheel():
     whl_files = [os.path.join(GLOBAL_WHEELS_DIR, f) for f in os.listdir(GLOBAL_WHEELS_DIR) if f.endswith(".whl")]
     if not whl_files:
         print("Building sentencepiece_lite Python wheel...")
-        pkg_dir = os.path.join(BUILD_DIR, "sentencepiece_lite_pkg")
+        pkg_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../packages/sentencepiece_lite"))
+        if not os.path.exists(pkg_dir):
+            pkg_dir = os.path.join(BUILD_DIR, "sentencepiece_lite_pkg")
         subprocess.run([
             sys.executable, "-m", "build", "--wheel", "--no-isolation", "--outdir", GLOBAL_WHEELS_DIR, pkg_dir
         ], check=True)
