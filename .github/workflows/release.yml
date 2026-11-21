@@ -46,10 +46,14 @@ jobs:
             cmake --build build_spm/sentencepiece/build --target generate_sentencepiece_lite_fbs -j "$(nproc)"
           fi
 
-      - name: abi3 Wheel のビルド
+      - name: manylinux_2_28 cp311-abi3 Wheel のビルド (cibuildwheel)
+        env:
+          CIBW_BUILD: cp311-manylinux_x86_64
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
         run: |
-          uv run --no-project --with build --with setuptools --with wheel \
-            python -m build --wheel --no-isolation --outdir dist packages/sentencepiece_lite
+          uv run --no-project --with cibuildwheel \
+            cibuildwheel --platform linux --output-dir dist packages/sentencepiece_lite
 
       - name: Stable ABI (abi3audit) 厳密検証
         run: |
@@ -75,7 +79,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: ビルド済み Wheel のダウンロード
@@ -149,9 +153,46 @@ jobs:
           name: sentencepiece_lite-abi3-wheel
           path: dist
 
+      - name: リリースノートの生成
+        run: |
+          WHEEL_NAME=$(basename dist/*.whl)
+          TAG="${GITHUB_REF_NAME}"
+          REPO="${GITHUB_REPOSITORY}"
+          WHEEL_URL="https://github.com/${REPO}/releases/download/${TAG}/${WHEEL_NAME}"
+          SHA256_CONTENT=$(cat dist/SHA256SUMS.txt)
+          cat <<EOF > release_body.md
+          ## sentencepiece_lite ${TAG} (\`cp311-abi3\` 単一 Wheel)
+
+          > **Python 3.11 / 3.12 / 3.13 / 3.14+ すべてにこの 1 ファイルで対応しています。**
+          > CPython Stable ABI (\`cp311-abi3\`) でビルドされているため、Python バージョン別の Wheel は不要です。CI にて **Python 3.11 / 3.12 / 3.13 / 3.14** 全バージョンでの動作を検証済みです。
+
+          ### 対応環境
+          - **Python**: 3.11 / 3.12 / 3.13 / 3.14 以降
+          - **プラットフォーム**: Linux x86_64 (\`manylinux_2_28_x86_64\` / glibc 2.28 以降の汎用 Linux・Docker 環境対応)
+          - **Stable ABI 検査**: \`abi3audit --strict\` 通過済み
+
+          ### インストール方法
+
+          **uv を使用する場合:**
+          \`\`\`bash
+          uv pip install ${WHEEL_URL}
+          \`\`\`
+
+          **pip を使用する場合:**
+          \`\`\`bash
+          pip install ${WHEEL_URL}
+          \`\`\`
+
+          ### SHA256 チェックサム
+          \`\`\`text
+          ${SHA256_CONTENT}
+          \`\`\`
+          EOF
+
       - name: GitHub Release の作成とアセット添付
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release_body.md
           generate_release_notes: true
           files: |
             dist/*.whl

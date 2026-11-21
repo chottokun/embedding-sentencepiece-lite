@@ -47,10 +47,14 @@ jobs:
             cmake --build build_spm/sentencepiece/build --target generate_sentencepiece_lite_fbs -j "$(nproc)"
           fi
 
-      - name: abi3 Wheel のビルド
+      - name: manylinux_2_28 cp311-abi3 Wheel のビルド (cibuildwheel)
+        env:
+          CIBW_BUILD: cp311-manylinux_x86_64
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
         run: |
-          uv run --no-project --with build --with setuptools --with wheel \
-            python -m build --wheel --no-isolation --outdir dist packages/sentencepiece_lite
+          uv run --no-project --with cibuildwheel \
+            cibuildwheel --platform linux --output-dir dist packages/sentencepiece_lite
 
       - name: Stable ABI (abi3audit) 厳密検証
         run: |
@@ -76,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: リポジトリのチェックアウト
