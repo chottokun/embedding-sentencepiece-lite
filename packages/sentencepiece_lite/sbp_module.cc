@@ -112,7 +112,10 @@ int Tokenizer_init(PyObject* self, PyObject* args, PyObject* kwargs) {
   if (path == nullptr) return -1;
   auto* obj = reinterpret_cast<TokenizerObject*>(self);
   try {
-    obj->impl = new FastSBPTokenizer(std::string(path, static_cast<size_t>(len)));
+    // 再初期化時のリークを防ぐため例外安全に差し替える
+    auto next = std::make_unique<FastSBPTokenizer>(std::string(path, static_cast<size_t>(len)));
+    delete obj->impl;
+    obj->impl = next.release();
   } catch (const std::exception& e) {
     PyErr_SetString(PyExc_RuntimeError, e.what());
     return -1;
@@ -124,17 +127,25 @@ void Tokenizer_dealloc(PyObject* self) {
   auto* obj = reinterpret_cast<TokenizerObject*>(self);
   delete obj->impl;
   obj->impl = nullptr;
-  PyObject_Free(self);
+  // Heap Type の参照カウントを適切に解放する
+  PyTypeObject* tp = Py_TYPE(self);
+  auto free_fn = reinterpret_cast<freefunc>(PyType_GetSlot(tp, Py_tp_free));
+  free_fn(self);
+  Py_DECREF(tp);
 }
 
 PyObject* Tokenizer_encode(PyObject* self, PyObject* args, PyObject* kwargs) {
   static const char* kwlist[] = {"text", "chunk_size", "num_threads", nullptr};
   PyObject* text_obj = nullptr;
-  int chunk_size = 16384;
+  Py_ssize_t chunk_size = 16384;
   int num_threads = 0;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|ii", const_cast<char**>(kwlist),
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|ni", const_cast<char**>(kwlist),
                                    &text_obj, &chunk_size, &num_threads))
     return nullptr;
+  if (chunk_size <= 0) {
+    PyErr_SetString(PyExc_ValueError, "chunk_size must be positive");
+    return nullptr;
+  }
   Py_ssize_t len = 0;
   const char* utf8 = PyUnicode_AsUTF8AndSize(text_obj, &len);
   if (utf8 == nullptr) return nullptr;
@@ -148,7 +159,8 @@ PyObject* Tokenizer_encode(PyObject* self, PyObject* args, PyObject* kwargs) {
   bool failed = false;
   Py_BEGIN_ALLOW_THREADS
   try {
-    ids = obj->impl->encode(std::string(utf8, static_cast<size_t>(len)), chunk_size, num_threads);
+    ids = obj->impl->encode(std::string(utf8, static_cast<size_t>(len)),
+                            static_cast<size_t>(chunk_size), num_threads);
   } catch (const std::exception& e) {
     error = e.what();
     failed = true;
