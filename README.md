@@ -93,7 +93,7 @@ ruri_sentencepiece_lite/
 |---|---|---|---|
 | **Python ランタイム総容量 (CPU)** | 約 1,240 MB (~1.2 GB) | **約 100 MB** | **約 92% 削減** |
 | **実行時常駐メモリ (30m RAM RSS)** | 980.6 MB | **324.1 MB** | **約 67% 削減** |
-| **トークナイザー Wheel** | 約 10 MB (`sentencepiece`) | **約 464 KB** (`sentencepiece_lite`, `cp311-abi3`) | **約 95% 削減** |
+| **トークナイザー Wheel** | 約 10 MB (`sentencepiece`) | **約 587 KB** (`sentencepiece_lite`, `cp311-abi3` / `manylinux`) | **約 94% 削減** |
 | **辞書バイナリ読み込み** | メモリパース展開あり | **4.57 MB (mmap ゼロコピー)** | **メモリ展開負荷ゼロ** |
 
 ---
@@ -102,11 +102,11 @@ ruri_sentencepiece_lite/
 
 ### 1. インストール
 
-> **Python 3.11 / 3.12 / 3.13+ 共通対応**: `sentencepiece_lite` は CPython Stable ABI (`cp311-abi3`) でビルドされているため、Python 3.11 以降の環境であれば以下の単一 Wheel をそのまま利用できます。
+> **Python 3.11 / 3.12 / 3.13 / 3.14+ 共通対応**: `sentencepiece_lite` は CPython Stable ABI (`cp311-abi3` / `manylinux_2_28_x86_64`) でビルドされているため、Python 3.11 以降の汎用 Linux 環境であれば以下の単一 Wheel をそのまま利用できます。
 
 ```bash
 # 事前ビルド済み abi3 Wheel と推論ランタイムの導入 (CPU)
-uv pip install https://github.com/chottokun/ruri_with_sentencepiece_lite/releases/download/v0.1.0/sentencepiece_lite-0.1.0-cp311-abi3-linux_x86_64.whl \
+uv pip install https://github.com/chottokun/ruri_with_sentencepiece_lite/releases/download/v0.1.1/sentencepiece_lite-0.1.1-cp311-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
                onnxruntime numpy huggingface_hub
 
 # GPU 推論を行う場合 (CUDA)

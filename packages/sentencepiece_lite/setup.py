@@ -24,7 +24,7 @@ ext_modules = [
 
 setup(
     name='sentencepiece_lite',
-    version='0.1.0',
+    version='0.1.1',
     description='SentencePiece Lite with Safe Boundary Pre-tokenization',
     ext_modules=ext_modules,
     options={"bdist_wheel": {"py_limited_api": "cp311"}},

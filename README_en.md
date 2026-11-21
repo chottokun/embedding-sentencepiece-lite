@@ -93,7 +93,7 @@ For full experimental setups, profile breakdowns, and trade-off analyses, please
 |---|---|---|---|
 | **Python Runtime Footprint (CPU)** | ~1,240 MB (~1.2 GB) | **~100 MB** | **~92% Reduction** |
 | **Peak Resident Memory (30m RAM RSS)** | 980.6 MB | **324.1 MB** | **~67% Reduction** |
-| **Tokenizer Wheel Package** | ~10 MB (`sentencepiece`) | **~464 KB** (`sentencepiece_lite`, `cp311-abi3`) | **~95% Reduction** |
+| **Tokenizer Wheel Package** | ~10 MB (`sentencepiece`) | **~587 KB** (`sentencepiece_lite`, `cp311-abi3` / `manylinux`) | **~94% Reduction** |
 | **Dictionary Loading Overhead** | In-memory parse & allocation | **4.57 MB (mmap zero-copy)** | **Zero allocation overhead** |
 
 ---
@@ -102,11 +102,11 @@ For full experimental setups, profile breakdowns, and trade-off analyses, please
 
 ### 1. Installation
 
-> **Compatible with Python 3.11 / 3.12 / 3.13+**: `sentencepiece_lite` is built against the CPython Stable ABI (`cp311-abi3`), so the single wheel below works across Python 3.11 and newer.
+> **Compatible with Python 3.11 / 3.12 / 3.13 / 3.14+**: `sentencepiece_lite` is built against the CPython Stable ABI (`cp311-abi3` / `manylinux_2_28_x86_64`), so the single wheel below works across Python 3.11 and newer on Linux.
 
 ```bash
 # Install pre-built abi3 wheel and runtime dependencies (CPU)
-uv pip install https://github.com/chottokun/ruri_with_sentencepiece_lite/releases/download/v0.1.0/sentencepiece_lite-0.1.0-cp311-abi3-linux_x86_64.whl \
+uv pip install https://github.com/chottokun/ruri_with_sentencepiece_lite/releases/download/v0.1.1/sentencepiece_lite-0.1.1-cp311-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
                onnxruntime numpy huggingface_hub
 
 # For GPU acceleration (CUDA)
