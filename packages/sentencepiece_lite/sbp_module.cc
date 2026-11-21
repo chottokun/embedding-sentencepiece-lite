@@ -1,5 +1,5 @@
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -12,7 +12,6 @@
 #include <stdexcept>
 #include "sentencepiece_lite.h"
 
-namespace py = pybind11;
 
 class FastSBPTokenizer {
 public:
@@ -89,10 +88,141 @@ private:
   std::unique_ptr<sentencepiece::lite::SentencePieceLiteProcessor> processor_;
 };
 
-PYBIND11_MODULE(sentencepiece_lite, m) {
-  m.doc() = "SentencePiece Lite Python Wrapper with Fast SBP Tokenization";
-  py::class_<FastSBPTokenizer>(m, "FastSBPTokenizer")
-      .def(py::init<const std::string&>(), py::arg("model_path"))
-      .def("encode", &FastSBPTokenizer::encode,
-           py::arg("text"), py::arg("chunk_size") = 16384, py::arg("num_threads") = 0);
+// ---------------------------------------------------------------------------
+// CPython stable-ABI (limited API) binding.
+// Replaces the former pybind11 module block: pybind11 (checked 2.13.6 and
+// 3.1.0) does not compile under Py_LIMITED_API, so this thin glue uses only
+// stable-ABI CPython functions. The Python-visible API is unchanged:
+//   sentencepiece_lite.FastSBPTokenizer(model_path).encode(text, ...)
+// ---------------------------------------------------------------------------
+namespace {
+
+struct TokenizerObject {
+  PyObject_HEAD
+  FastSBPTokenizer* impl;
+};
+
+int Tokenizer_init(PyObject* self, PyObject* args, PyObject* kwargs) {
+  static const char* kwlist[] = {"model_path", nullptr};
+  PyObject* path_obj = nullptr;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", const_cast<char**>(kwlist), &path_obj))
+    return -1;
+  Py_ssize_t len = 0;
+  const char* path = PyUnicode_AsUTF8AndSize(path_obj, &len);
+  if (path == nullptr) return -1;
+  auto* obj = reinterpret_cast<TokenizerObject*>(self);
+  try {
+    // 再初期化時のリークを防ぐため例外安全に差し替える
+    auto next = std::make_unique<FastSBPTokenizer>(std::string(path, static_cast<size_t>(len)));
+    delete obj->impl;
+    obj->impl = next.release();
+  } catch (const std::exception& e) {
+    PyErr_SetString(PyExc_RuntimeError, e.what());
+    return -1;
+  }
+  return 0;
+}
+
+void Tokenizer_dealloc(PyObject* self) {
+  auto* obj = reinterpret_cast<TokenizerObject*>(self);
+  delete obj->impl;
+  obj->impl = nullptr;
+  // Heap Type の参照カウントを適切に解放する
+  PyTypeObject* tp = Py_TYPE(self);
+  auto free_fn = reinterpret_cast<freefunc>(PyType_GetSlot(tp, Py_tp_free));
+  free_fn(self);
+  Py_DECREF(tp);
+}
+
+PyObject* Tokenizer_encode(PyObject* self, PyObject* args, PyObject* kwargs) {
+  static const char* kwlist[] = {"text", "chunk_size", "num_threads", nullptr};
+  PyObject* text_obj = nullptr;
+  Py_ssize_t chunk_size = 16384;
+  int num_threads = 0;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|ni", const_cast<char**>(kwlist),
+                                   &text_obj, &chunk_size, &num_threads))
+    return nullptr;
+  if (chunk_size <= 0) {
+    PyErr_SetString(PyExc_ValueError, "chunk_size must be positive");
+    return nullptr;
+  }
+  Py_ssize_t len = 0;
+  const char* utf8 = PyUnicode_AsUTF8AndSize(text_obj, &len);
+  if (utf8 == nullptr) return nullptr;
+  auto* obj = reinterpret_cast<TokenizerObject*>(self);
+  if (obj->impl == nullptr) {
+    PyErr_SetString(PyExc_RuntimeError, "Tokenizer is not initialized");
+    return nullptr;
+  }
+  std::vector<int> ids;
+  std::string error;
+  bool failed = false;
+  Py_BEGIN_ALLOW_THREADS
+  try {
+    ids = obj->impl->encode(std::string(utf8, static_cast<size_t>(len)),
+                            static_cast<size_t>(chunk_size), num_threads);
+  } catch (const std::exception& e) {
+    error = e.what();
+    failed = true;
+  }
+  Py_END_ALLOW_THREADS
+  if (failed) {
+    PyErr_SetString(PyExc_RuntimeError, error.c_str());
+    return nullptr;
+  }
+  PyObject* list = PyList_New(static_cast<Py_ssize_t>(ids.size()));
+  if (list == nullptr) return nullptr;
+  for (size_t i = 0; i < ids.size(); ++i) {
+    PyObject* item = PyLong_FromLong(static_cast<long>(ids[i]));
+    if (item == nullptr) {
+      Py_DECREF(list);
+      return nullptr;
+    }
+    PyList_SetItem(list, static_cast<Py_ssize_t>(i), item);
+  }
+  return list;
+}
+
+PyMethodDef tokenizer_methods[] = {
+    {"encode", reinterpret_cast<PyCFunction>(reinterpret_cast<void*>(Tokenizer_encode)),
+     METH_VARARGS | METH_KEYWORDS, "encode(text, chunk_size=16384, num_threads=0) -> list[int]"},
+    {nullptr, nullptr, 0, nullptr},
+};
+
+PyType_Slot tokenizer_slots[] = {
+    {Py_tp_new, reinterpret_cast<void*>(PyType_GenericNew)},
+    {Py_tp_init, reinterpret_cast<void*>(Tokenizer_init)},
+    {Py_tp_dealloc, reinterpret_cast<void*>(Tokenizer_dealloc)},
+    {Py_tp_methods, reinterpret_cast<void*>(tokenizer_methods)},
+    {0, nullptr},
+};
+
+PyType_Spec tokenizer_spec = {
+    "sentencepiece_lite.FastSBPTokenizer",
+    sizeof(TokenizerObject),
+    0,
+    Py_TPFLAGS_DEFAULT,
+    tokenizer_slots,
+};
+
+PyModuleDef module_def = {PyModuleDef_HEAD_INIT, "sentencepiece_lite", nullptr, -1,
+                          nullptr, nullptr, nullptr, nullptr, nullptr};
+
+}  // namespace
+
+PyMODINIT_FUNC PyInit_sentencepiece_lite(void) {
+  PyObject* type = PyType_FromSpec(&tokenizer_spec);
+  if (type == nullptr) return nullptr;
+  PyObject* module = PyModule_Create(&module_def);
+  if (module == nullptr) {
+    Py_DECREF(type);
+    return nullptr;
+  }
+  if (PyModule_AddObjectRef(module, "FastSBPTokenizer", type) < 0) {
+    Py_DECREF(type);
+    Py_DECREF(module);
+    return nullptr;
+  }
+  Py_DECREF(type);
+  return module;
 }
