@@ -1,0 +1,159 @@
+name: Release Wheel
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # 1. cp311-abi3 Wheel のビルドと Stable ABI 厳密検査
+  build-wheel:
+    name: Build cp311-abi3 Wheel
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリのチェックアウト
+        uses: actions/checkout@v4
+
+      - name: uv のセットアップ
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Python 3.11 のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: SentencePiece 生成ヘッダ・FlatBuffers のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            build_spm/sentencepiece/build/third_party/flatbuffers-src/include
+            build_spm/sentencepiece/build/lite/sentencepiece_lite_generated.h
+          key: spm-fbs-headers-${{ runner.os }}-${{ hashFiles('packages/sentencepiece_lite/sentencepiece_lite.h', 'packages/sentencepiece_lite/sentencepiece_lite.cc') }}
+
+      - name: SentencePiece Lite 生成ヘッダの準備
+        run: |
+          if [ ! -f build_spm/sentencepiece/build/lite/sentencepiece_lite_generated.h ] || [ ! -d build_spm/sentencepiece/build/third_party/flatbuffers-src/include ]; then
+            git clone --depth=1 https://github.com/google/sentencepiece.git build_spm/sentencepiece
+            cmake -B build_spm/sentencepiece/build -S build_spm/sentencepiece \
+              -DSPM_ENABLE_SHARED=OFF -DSPM_BUILD_TEST=OFF -DCMAKE_BUILD_TYPE=Release
+            cmake --build build_spm/sentencepiece/build --target generate_sentencepiece_lite_fbs -j "$(nproc)"
+          fi
+
+      - name: abi3 Wheel のビルド
+        run: |
+          uv run --no-project --with build --with setuptools --with wheel \
+            python -m build --wheel --no-isolation --outdir dist packages/sentencepiece_lite
+
+      - name: Stable ABI (abi3audit) 厳密検証
+        run: |
+          uv run --no-project --with abi3audit \
+            abi3audit --strict dist/sentencepiece_lite-*-cp311-abi3-*.whl
+
+      - name: SHA256 チェックサム生成
+        run: |
+          (cd dist && sha256sum *.whl > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Wheel アーティファクトのアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece_lite-abi3-wheel
+          path: dist/
+
+  # 2. Python 3.11 / 3.12 / 3.13 マトリックス検証
+  verify-wheel:
+    name: Verify Wheel (Python ${{ matrix.python-version }})
+    needs: build-wheel
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: ビルド済み Wheel のダウンロード
+        uses: actions/download-artifact@v4
+        with:
+          name: sentencepiece_lite-abi3-wheel
+          path: dist
+
+      - name: uv のセットアップ
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Python ${{ matrix.python-version }} のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: abi3 Wheel のインストールと単体テスト
+        run: |
+          uv venv --python ${{ matrix.python-version }} .venv
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
+          uv pip install dist/sentencepiece_lite-*-cp311-abi3-*.whl huggingface_hub
+          python -c '
+          import sys, gc
+          from huggingface_hub import hf_hub_download
+          import sentencepiece_lite as spl
+
+          fb_path = hf_hub_download("Chottokun/ruri-v3-30m-lite", "ruri_v3_30m.spm.fb")
+          tok = spl.FastSBPTokenizer(fb_path)
+
+          short_ids = tok.encode("検索クエリ: 日本の首都はどこですか？")
+          assert isinstance(short_ids, list) and len(short_ids) > 0 and all(isinstance(x, int) for x in short_ids)
+
+          long_text = ("日本の地方自治体におけるDX推進の現状と課題について説明します。\n" * 600)
+          assert len(long_text.encode("utf-8")) > 16384
+          long_ids = tok.encode(long_text)
+          assert isinstance(long_ids, list) and len(long_ids) > 1000
+
+          gc.collect()
+          ref_before = sys.getrefcount(spl.FastSBPTokenizer)
+          for _ in range(100):
+              t = spl.FastSBPTokenizer(fb_path)
+              del t
+          gc.collect()
+          ref_after = sys.getrefcount(spl.FastSBPTokenizer)
+          assert ref_before == ref_after, f"refcount leaked: {ref_before} -> {ref_after}"
+
+          tok.__init__(fb_path)
+          assert tok.encode("検索クエリ: 日本の首都はどこですか？") == short_ids
+
+          for bad in (0, -1):
+              try:
+                  tok.encode("hello", chunk_size=bad)
+                  raise AssertionError(f"Expected ValueError for chunk_size={bad}")
+              except ValueError:
+                  pass
+          print(f"Release wheel verified (Python {sys.version.split()[0]})")
+          '
+
+  # 3. タグプッシュ時に GitHub Releases へ自動公開
+  publish-release:
+    name: Publish GitHub Release
+    needs: verify-wheel
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: ビルド済み Wheel のダウンロード
+        uses: actions/download-artifact@v4
+        with:
+          name: sentencepiece_lite-abi3-wheel
+          path: dist
+
+      - name: GitHub Release の作成とアセット添付
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/SHA256SUMS.txt

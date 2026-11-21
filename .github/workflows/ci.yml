@@ -5,35 +5,101 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    name: Run CI Tests (Python ${{ matrix.python-version }})
+  # 1. cp311-abi3 Wheel のビルドと Stable ABI 厳密検査
+  build-wheel:
+    name: Build cp311-abi3 Wheel
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11"]
-
     steps:
-      - name: Checkout repository
+      - name: リポジトリのチェックアウト
         uses: actions/checkout@v4
 
-      - name: Set up uv
+      - name: uv のセットアップ
         uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
           enable-cache: true
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Python 3.11 のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: SentencePiece 生成ヘッダ・FlatBuffers のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            build_spm/sentencepiece/build/third_party/flatbuffers-src/include
+            build_spm/sentencepiece/build/lite/sentencepiece_lite_generated.h
+          key: spm-fbs-headers-${{ runner.os }}-${{ hashFiles('packages/sentencepiece_lite/sentencepiece_lite.h', 'packages/sentencepiece_lite/sentencepiece_lite.cc') }}
+
+      - name: SentencePiece Lite 生成ヘッダの準備
+        run: |
+          if [ ! -f build_spm/sentencepiece/build/lite/sentencepiece_lite_generated.h ] || [ ! -d build_spm/sentencepiece/build/third_party/flatbuffers-src/include ]; then
+            git clone --depth=1 https://github.com/google/sentencepiece.git build_spm/sentencepiece
+            cmake -B build_spm/sentencepiece/build -S build_spm/sentencepiece \
+              -DSPM_ENABLE_SHARED=OFF -DSPM_BUILD_TEST=OFF -DCMAKE_BUILD_TYPE=Release
+            cmake --build build_spm/sentencepiece/build --target generate_sentencepiece_lite_fbs -j "$(nproc)"
+          fi
+
+      - name: abi3 Wheel のビルド
+        run: |
+          uv run --no-project --with build --with setuptools --with wheel \
+            python -m build --wheel --no-isolation --outdir dist packages/sentencepiece_lite
+
+      - name: Stable ABI (abi3audit) 厳密検証
+        run: |
+          uv run --no-project --with abi3audit \
+            abi3audit --strict dist/sentencepiece_lite-*-cp311-abi3-*.whl
+
+      - name: SHA256 チェックサム生成
+        run: |
+          (cd dist && sha256sum *.whl > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Wheel アーティファクトのアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece_lite-abi3-wheel
+          path: dist/
+
+  # 2. Python 3.11 / 3.12 / 3.13 マトリックス検証テスト
+  test:
+    name: Run CI Tests (Python ${{ matrix.python-version }})
+    needs: build-wheel
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: リポジトリのチェックアウト
+        uses: actions/checkout@v4
+
+      - name: ビルド済み Wheel のダウンロード
+        uses: actions/download-artifact@v4
+        with:
+          name: sentencepiece_lite-abi3-wheel
+          path: dist
+
+      - name: uv のセットアップ
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Python ${{ matrix.python-version }} のセットアップ
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Cache Hugging Face Hub downloads
+      - name: Hugging Face Hub ダウンロードキャッシュ
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
@@ -41,24 +107,110 @@ jobs:
           restore-keys: |
             hf-cache-${{ runner.os }}-
 
-      - name: Python Syntax Verification
+      - name: Python 構文チェック
         run: |
-          uv run python -m py_compile dist_assets/*.py scripts/*.py
+          uv run --no-project python -m py_compile dist_assets/ruri_v3_lite.py dist_assets/ruri_v3_reranker_lite.py scripts/*.py
 
-      - name: Install Runtime Dependencies
+      - name: ビルド済み abi3 Wheel とランタイム依存のインストール
         run: |
           uv venv --python ${{ matrix.python-version }} .venv
           echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
-          uv pip install "https://huggingface.co/Chottokun/ruri-v3-30m-lite/resolve/main/wheels/sentencepiece_lite-0.1.0-cp311-cp311-linux_x86_64.whl" onnxruntime numpy huggingface_hub
+          uv pip install dist/sentencepiece_lite-*-cp311-abi3-*.whl onnxruntime numpy huggingface_hub
 
-      - name: Run Lightweight Embedding Inference Test
+      - name: abi3 バインディング単体テスト（リーク・再初期化・境界値検証）
+        run: |
+          python -c '
+          import sys, gc
+          from huggingface_hub import hf_hub_download
+          import sentencepiece_lite as spl
+
+          fb_path = hf_hub_download("Chottokun/ruri-v3-30m-lite", "ruri_v3_30m.spm.fb")
+          tok = spl.FastSBPTokenizer(fb_path)
+
+          short_ids = tok.encode("検索クエリ: 日本の首都はどこですか？")
+          assert isinstance(short_ids, list) and len(short_ids) > 0 and all(isinstance(x, int) for x in short_ids)
+
+          long_text = ("日本の地方自治体におけるDX推進の現状と課題について説明します。\n" * 600)
+          assert len(long_text.encode("utf-8")) > 16384
+          long_ids = tok.encode(long_text)
+          assert isinstance(long_ids, list) and len(long_ids) > 1000
+
+          gc.collect()
+          ref_before = sys.getrefcount(spl.FastSBPTokenizer)
+          for _ in range(100):
+              t = spl.FastSBPTokenizer(fb_path)
+              del t
+          gc.collect()
+          ref_after = sys.getrefcount(spl.FastSBPTokenizer)
+          assert ref_before == ref_after, f"refcount leaked: {ref_before} -> {ref_after}"
+
+          tok.__init__(fb_path)
+          assert tok.encode("検索クエリ: 日本の首都はどこですか？") == short_ids
+
+          for bad in (0, -1):
+              try:
+                  tok.encode("hello", chunk_size=bad)
+                  raise AssertionError(f"Expected ValueError for chunk_size={bad}")
+              except ValueError:
+                  pass
+          print(f"abi3 unit checks passed (Python {sys.version.split()[0]})")
+          '
+
+      - name: 軽量埋め込み推論テスト
         run: |
           python -c "from dist_assets.ruri_v3_lite import RuriV3Lite; m = RuriV3Lite(repo_id='Chottokun/ruri-v3-30m-lite'); emb = m.encode(['CI test query']); print('Shape:', emb.shape); assert emb.shape == (1, 256)"
 
-      - name: Run Lightweight Reranker Download & Inference Test
+      - name: 軽量リランカー HF ダウンロード・推論テスト
         run: |
           python scripts/test_reranker_hf_download.py
 
-      - name: Run Reranker Robustness Test Suite
+      - name: リランカー堅牢性テストスイート
         run: |
           python scripts/test_reranker_robustness.py
+
+  # 3. 脆弱性・セキュリティチェック
+  security:
+    name: Security & Vulnerability Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリのチェックアウト（全履歴）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: uv のセットアップ
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Python 3.11 のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: ランタイム依存パッケージの CVE 検査 (pip-audit)
+        run: |
+          uv venv --python 3.11 .audit-venv
+          uv pip install --python .audit-venv/bin/python onnxruntime numpy huggingface_hub
+          uv run --no-project --with pip-audit \
+            pip-audit --path .audit-venv/lib/python3.11/site-packages --strict
+          rm -rf .audit-venv
+
+      - name: Python 静的セキュリティ解析 (bandit)
+        run: |
+          uv run --no-project --with bandit \
+            bandit -r dist_assets/ruri_v3_lite.py dist_assets/ruri_v3_reranker_lite.py scripts/ packages/ \
+            --skip B615 --severity-level medium --confidence-level medium
+
+      - name: C++ 静的解析 (cppcheck)
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends cppcheck
+          cppcheck --enable=warning,performance,portability \
+            --suppress=missingIncludeSystem --error-exitcode=1 --std=c++20 \
+            packages/sentencepiece_lite/sbp_module.cc
+
+      - name: シークレット漏洩スキャン (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
