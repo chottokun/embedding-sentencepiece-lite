@@ -98,9 +98,8 @@ jobs:
       - name: abi3 Wheel のインストールと単体テスト
         run: |
           uv venv --python ${{ matrix.python-version }} .venv
-          echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
-          uv pip install dist/sentencepiece_lite-*-cp311-abi3-*.whl huggingface_hub
-          python -c '
+          uv pip install --python .venv/bin/python dist/sentencepiece_lite-*-cp311-abi3-*.whl huggingface_hub
+          .venv/bin/python -c '
           import sys, gc
           from huggingface_hub import hf_hub_download
           import sentencepiece_lite as spl
