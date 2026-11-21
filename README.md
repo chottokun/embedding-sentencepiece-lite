@@ -21,7 +21,7 @@ PyTorch や Transformers に依存せず、**`sentencepiece_lite` + `onnxruntime
 | 従来の PyTorch / Transformers 構成 | 本実装（Zero-Torch 構成） | 技術的要因と特性 |
 |---|---|---|
 | **パッケージ容量の肥大化**<br>（PyTorch 等で数GB消費） | **軽量フットプリント**<br>（実行環境 約70〜100MB） | 実行時依存を `sentencepiece_lite`, `onnxruntime`, `numpy`, `huggingface_hub` に限定。コンテナサイズ縮小とコールドスタートを短縮。 |
-| **SentencePiece のビルド環境依存**<br>（CMake/gcc等のコンパイルが必要） | **事前ビルド済み Wheel の提供** | 事前ビルド済み Wheel（`.whl`）を提供し、C++ コンパイル不要で即時導入可能。 |
+| **SentencePiece のビルド環境依存**<br>（CMake/gcc等のコンパイルが必要） | **事前ビルド済み `abi3` Wheel の提供** | Python 3.11+ 共通の単一 `cp311-abi3` Wheel（`.whl`）を GitHub Releases で提供し、C++ コンパイル不要で即時導入可能。 |
 | **前処理（トークナイズ）の遅延**<br>（GPUが遊休する要因） | **C++20 によるゼロコピー前処理** | FlatBuffers（`mmap`）および Safe Boundary Pre-tokenization（SBP）により、1文あたり約 3.4 µs で処理。 |
 | **旧世代 GPU での FP16 遅延**<br>（Pascal 世代等の制約） | **ハードウェア適応型自動切り替え** | `ctypes` で GPU Compute Capability を判定。7.0 以上は FP16、7.0 未満または CPU は FP32 を自動選択。 |
 | **自作ラッパーによる数値乖離の懸念** | **数学的等価性の検証済み** | PyTorch 公式出力（Mean Pooling + L2正規化）とのコサイン類似度 1.0000 を実機検証。 |
@@ -35,6 +35,11 @@ ruri_sentencepiece_lite/
 ├── AGENTS.md                  # 厳格な開発制約・セキュリティ方針 (uv利用・秘密情報保護)
 ├── .gitignore                 # 巨大モデル重み・秘密情報・キャッシュの除外設定
 ├── .env.example               # 環境変数テンプレート (HF_TOKEN 等)
+├── .github/workflows/
+│   ├── ci.yml                 # cp311-abi3 ビルド・Python 3.11〜3.13 検証・脆弱性チェック
+│   └── release.yml            # タグプッシュ時の GitHub Releases 自動公開
+├── packages/
+│   └── sentencepiece_lite/    # CPython Stable ABI (cp311-abi3) 拡張ソース (sbp_module.cc 等)
 ├── docs/
 │   ├── benchmark.md           # 埋め込みモデルの性能評価レポート
 │   └── reranker_benchmark.md  # リランカーモデルの性能評価・トレードオフ考察レポート
@@ -88,7 +93,7 @@ ruri_sentencepiece_lite/
 |---|---|---|---|
 | **Python ランタイム総容量 (CPU)** | 約 1,240 MB (~1.2 GB) | **約 100 MB** | **約 92% 削減** |
 | **実行時常駐メモリ (30m RAM RSS)** | 980.6 MB | **324.1 MB** | **約 67% 削減** |
-| **トークナイザー Wheel** | 約 10 MB (`sentencepiece`) | **1.7 MB** (`sentencepiece_lite`) | **約 83% 削減** |
+| **トークナイザー Wheel** | 約 10 MB (`sentencepiece`) | **約 464 KB** (`sentencepiece_lite`, `cp311-abi3`) | **約 95% 削減** |
 | **辞書バイナリ読み込み** | メモリパース展開あり | **4.57 MB (mmap ゼロコピー)** | **メモリ展開負荷ゼロ** |
 
 ---
@@ -97,13 +102,15 @@ ruri_sentencepiece_lite/
 
 ### 1. インストール
 
+> **Python 3.11 / 3.12 / 3.13+ 共通対応**: `sentencepiece_lite` は CPython Stable ABI (`cp311-abi3`) でビルドされているため、Python 3.11 以降の環境であれば以下の単一 Wheel をそのまま利用できます。
+
 ```bash
-# 事前ビルド済み Wheel と推論ランタイムの導入 (CPU)
-pip install https://huggingface.co/Chottokun/ruri-v3-30m-lite/resolve/main/wheels/sentencepiece_lite-0.1.0-cp311-cp311-linux_x86_64.whl \
-            onnxruntime numpy huggingface_hub
+# 事前ビルド済み abi3 Wheel と推論ランタイムの導入 (CPU)
+uv pip install https://github.com/chottokun/ruri_with_sentencepiece_lite/releases/download/v0.1.0/sentencepiece_lite-0.1.0-cp311-abi3-linux_x86_64.whl \
+               onnxruntime numpy huggingface_hub
 
 # GPU 推論を行う場合 (CUDA)
-pip install onnxruntime-gpu
+uv pip install onnxruntime-gpu
 ```
 
 ### 2. 推論コード
@@ -239,6 +246,8 @@ uv run python scripts/deploy_reranker_to_hf.py
 ## セキュリティと機微情報保護方針
 - Hugging Face の書き込みトークン（`HF_TOKEN`）等の秘密情報はコード内に記述せず、環境変数経由でのみ受け取ります。
 - 巨大なモデルバイナリ（`*.onnx`, `*.onnx.data`, `*.spm.fb`, `*.whl`）やキャッシュディレクトリは `.gitignore` により Git 管理から除外されています。
+- GitHub Actions（[.github/workflows/ci.yml](.github/workflows/ci.yml)）にて、`cp311-abi3` Wheel ビルド・`abi3audit --strict`・Python 3.11〜3.13 マトリックス検証に加え、`pip-audit` / `bandit` / `cppcheck` / `gitleaks` による脆弱性・セキュリティスキャンを自動実行しています。
+- バージョンタグ（`v*`）のプッシュ時には [.github/workflows/release.yml](.github/workflows/release.yml) により検証済み `cp311-abi3` Wheel と `SHA256SUMS.txt` が GitHub Releases へ自動公開されます。
 
 ---
 

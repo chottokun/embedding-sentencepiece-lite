@@ -21,7 +21,7 @@ A lightweight Japanese text embedding and cross-encoder reranker inference envir
 | Traditional PyTorch / Transformers Stack | Zero-Torch Architecture (This Repo) | Technical Rationale & Characteristics |
 |---|---|---|
 | **Large package footprint** (Several GBs for PyTorch alone) | **Minimal runtime footprint** (~70–100 MB installed) | Runtime dependencies restricted strictly to `sentencepiece_lite`, `onnxruntime`, `numpy`, and `huggingface_hub`. Lowers container sizes and cold-start latencies. |
-| **SentencePiece build dependencies** (Requires CMake, gcc, Python dev headers) | **Pre-compiled Wheel distribution** | Pre-built Wheels (`.whl`) provided for one-line installation without requiring a C++ compiler toolchain. |
+| **SentencePiece build dependencies** (Requires CMake, gcc, Python dev headers) | **Pre-compiled `abi3` Wheel distribution** | Single `cp311-abi3` Wheel (`.whl`) for Python 3.11+ distributed via GitHub Releases—one-line installation without a C++ compiler toolchain. |
 | **CPU tokenization bottlenecks** (GPU idle time during preprocessing) | **C++20 Zero-copy tokenization** | Leverages FlatBuffers (`mmap`) and Safe Boundary Pre-tokenization (SBP), completing tokenization in ~3.4 µs per sentence. |
 | **FP16 performance degradation on legacy GPUs** (Pascal architecture) | **Hardware-adaptive automatic dispatch** | Dynamically checks GPU Compute Capability via `ctypes`. Automatically selects FP16 for CC $\ge 7.0$ (Turing/Ampere+) and FP32 for CC $< 7.0$ (Pascal) or CPU. |
 | **Numerical divergence in custom wrappers** | **Mathematical equivalence verified** | Cosine similarity of 1.0000 against official PyTorch outputs (Mean Pooling + L2 normalization) validated on reference datasets. |
@@ -35,6 +35,11 @@ ruri_sentencepiece_lite/
 ├── AGENTS.md                  # Strict engineering constraints & security policies (uv, secret protection)
 ├── .gitignore                 # Exclusion rules for large binaries, model weights, and cache dirs
 ├── .env.example               # Template for environment variables (HF_TOKEN, etc.)
+├── .github/workflows/
+│   ├── ci.yml                 # cp311-abi3 wheel build, Python 3.11–3.13 matrix tests, security checks
+│   └── release.yml            # Automated GitHub Releases publishing on version tags
+├── packages/
+│   └── sentencepiece_lite/    # CPython Stable ABI (cp311-abi3) extension sources (sbp_module.cc, etc.)
 ├── docs/
 │   ├── benchmark.md           # Detailed benchmark report for embedding models
 │   └── reranker_benchmark.md  # Detailed benchmark & architectural trade-off report for reranker
@@ -88,7 +93,7 @@ For full experimental setups, profile breakdowns, and trade-off analyses, please
 |---|---|---|---|
 | **Python Runtime Footprint (CPU)** | ~1,240 MB (~1.2 GB) | **~100 MB** | **~92% Reduction** |
 | **Peak Resident Memory (30m RAM RSS)** | 980.6 MB | **324.1 MB** | **~67% Reduction** |
-| **Tokenizer Wheel Package** | ~10 MB (`sentencepiece`) | **1.7 MB** (`sentencepiece_lite`) | **~83% Reduction** |
+| **Tokenizer Wheel Package** | ~10 MB (`sentencepiece`) | **~464 KB** (`sentencepiece_lite`, `cp311-abi3`) | **~95% Reduction** |
 | **Dictionary Loading Overhead** | In-memory parse & allocation | **4.57 MB (mmap zero-copy)** | **Zero allocation overhead** |
 
 ---
@@ -97,13 +102,15 @@ For full experimental setups, profile breakdowns, and trade-off analyses, please
 
 ### 1. Installation
 
+> **Compatible with Python 3.11 / 3.12 / 3.13+**: `sentencepiece_lite` is built against the CPython Stable ABI (`cp311-abi3`), so the single wheel below works across Python 3.11 and newer.
+
 ```bash
-# Install pre-built wheel and runtime dependencies (CPU)
-pip install https://huggingface.co/Chottokun/ruri-v3-30m-lite/resolve/main/wheels/sentencepiece_lite-0.1.0-cp311-cp311-linux_x86_64.whl \
-            onnxruntime numpy huggingface_hub
+# Install pre-built abi3 wheel and runtime dependencies (CPU)
+uv pip install https://github.com/chottokun/ruri_with_sentencepiece_lite/releases/download/v0.1.0/sentencepiece_lite-0.1.0-cp311-abi3-linux_x86_64.whl \
+               onnxruntime numpy huggingface_hub
 
 # For GPU acceleration (CUDA)
-pip install onnxruntime-gpu
+uv pip install onnxruntime-gpu
 ```
 
 ### 2. Inference Code
@@ -230,6 +237,8 @@ uv run python scripts/deploy_reranker_to_hf.py
 ## Security and Secret Hygiene
 - All Hugging Face credentials (`HF_TOKEN`) are handled strictly via environment variables. No secrets are committed.
 - Large binaries (`*.onnx`, `*.onnx.data`, `*.spm.fb`, `*.whl`) and local caches are ignored via `.gitignore`.
+- GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) automatically runs `cp311-abi3` wheel builds, `abi3audit --strict`, Python 3.11–3.13 matrix tests, and security/vulnerability scans (`pip-audit`, `bandit`, `cppcheck`, `gitleaks`).
+- Pushing a version tag (`v*`) triggers [.github/workflows/release.yml](.github/workflows/release.yml) to verify and publish the `cp311-abi3` wheel and `SHA256SUMS.txt` to GitHub Releases.
 
 ---
 

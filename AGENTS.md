@@ -21,7 +21,9 @@
 ---
 
 ## File Structure & Roles
-- `packages/sentencepiece_lite/`: Source code for the lightweight sentencepiece_lite C++/Python extension with FastSBPTokenizer.
+- `packages/sentencepiece_lite/`: Source code for the lightweight sentencepiece_lite C++/Python extension with FastSBPTokenizer (CPython Stable ABI `cp311-abi3`).
+- `.github/workflows/ci.yml`: Automated CI pipeline (cp311-abi3 wheel build, `abi3audit`, Python 3.11–3.13 matrix tests, `pip-audit`/`bandit`/`cppcheck`/`gitleaks`).
+- `.github/workflows/release.yml`: Automated GitHub Releases workflow triggered by `v*` tags (`cp311-abi3` wheel + `SHA256SUMS.txt`).
 - `scripts/verify_tokenizer.py`: Phase 0 verification to confirm BOS/EOS token IDs, special tokens, and pooling behavior.
 - `scripts/export_tokenizer_json.py`: Export HF Fast Tokenizer format (tokenizer.json, tokenizer_config.json) with verified special tokens.
 - `scripts/build_and_export.py`: Build `.whl` from source, export FP32 ONNX, and convert to FP16. (PyTorch/Transformers allowed here).
