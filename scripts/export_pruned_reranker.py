@@ -6,6 +6,7 @@ import numpy as np
 from transformers import AutoModelForSequenceClassification
 import onnx
 from onnxruntime.quantization import quantize_dynamic, QuantType
+from onnx_utils import cleanup_external_data, verify_inline_onnx
 
 MODEL_ID = "cl-nagoya/ruri-v3-reranker-310m"
 OUTPUT_DIR = "dist_assets/ruri_v3_reranker_310m"
@@ -47,6 +48,7 @@ torch.onnx.export(
     },
     opset_version=17,
     do_constant_folding=True,
+    external_data=False,
 )
 print(f"FP32 ONNX raw exported: {os.path.getsize(fp32_onnx_path)/1024/1024:.1f} MB")
 
@@ -59,7 +61,8 @@ for node in fp32_model.graph.node:
             node.attribute.remove(a)
 # 形状推論競合を防ぐため value_info をクリア
 fp32_model.graph.ClearField("value_info")
-onnx.save(fp32_model, fp32_onnx_path)
+onnx.save(fp32_model, fp32_onnx_path, save_as_external_data=False)
+verify_inline_onnx(fp32_onnx_path)
 print("ONNX グラフサニタイズ完了")
 
 print("=== 4. INT8 Full 量子化 (Linear + Embedding) ===")

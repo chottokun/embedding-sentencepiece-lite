@@ -38,12 +38,23 @@ def main():
     create_repo(repo_id=repo_id, token=token, repo_type="model", exist_ok=True)
     print(f"リポジトリ確認完了: https://huggingface.co/{repo_id}")
 
-    # フォルダ全体のアップロード
+    # フォルダ全体のアップロード (不要な .onnx.data / 中間ファイルを除外し、リモートの残存 .onnx.data も削除)
     print("資材をアップロード中 (ONNX, FlatBuffers, Wheels, ラッパー, ドキュメント)...")
     api.upload_folder(
         folder_path=SRC_DIR,
         repo_id=repo_id,
-        commit_message="feat: initial release of ruri-v3-reranker-310m-lite (Zero-Torch & ultra-fast reranker)"
+        repo_type="model",
+        commit_message="chore: remove orphaned .onnx.data and update ruri-v3-reranker-310m assets",
+        ignore_patterns=[
+            "__pycache__/**",
+            "*.pyc",
+            "*.onnx.data",
+            "*.onnx_data",
+            "model_clean.onnx",
+            "model_pruned_16l.onnx",
+            "model_pruned_16l-inferred.onnx",
+        ],
+        delete_patterns=["*.onnx.data", "*.onnx_data"],
     )
 
     print("\n" + "=" * 70)

@@ -12,6 +12,7 @@ import torch
 import onnx
 from onnxconverter_common import float16
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from onnx_utils import cleanup_external_data, verify_inline_onnx
 
 MODEL_ID = "cl-nagoya/ruri-v3-reranker-310m"
 OUT_DIR = os.path.abspath("./dist_assets/ruri_v3_reranker_310m")
@@ -32,6 +33,7 @@ def main():
     # 2. FP32 ONNX エクスポート
     print("[2/5] FP32 ONNX エクスポート中...")
     fp32_onnx_path = os.path.join(OUT_DIR, "model.onnx")
+    cleanup_external_data(fp32_onnx_path)
 
     dummy_input_ids = torch.ones((2, 64), dtype=torch.long)
     dummy_attention_mask = torch.ones((2, 64), dtype=torch.long)
@@ -60,6 +62,7 @@ def main():
         },
         opset_version=17,
         do_constant_folding=True,
+        external_data=False,
     )
     print(f"  FP32 ONNX 保存完了: {fp32_onnx_path}")
 
@@ -71,7 +74,8 @@ def main():
             attrs_to_remove = [a for a in node.attribute if a.name == "num_outputs"]
             for a in attrs_to_remove:
                 node.attribute.remove(a)
-    onnx.save(fp32_model, fp32_onnx_path)
+    onnx.save(fp32_model, fp32_onnx_path, save_as_external_data=False)
+    verify_inline_onnx(fp32_onnx_path)
     print("  ONNX グラフサニタイズ完了")
 
     # 4. FP16 変換
@@ -82,7 +86,9 @@ def main():
         disable_shape_infer=False
     )
     fp16_onnx_path = os.path.join(OUT_DIR, "model_fp16.onnx")
-    onnx.save(fp16_model, fp16_onnx_path)
+    cleanup_external_data(fp16_onnx_path)
+    onnx.save(fp16_model, fp16_onnx_path, save_as_external_data=False)
+    verify_inline_onnx(fp16_onnx_path)
     print(f"  FP16 ONNX 保存完了: {fp16_onnx_path} ({os.path.getsize(fp16_onnx_path):,} bytes)")
 
     # 5. 資材の配置 (FlatBuffers 辞書, wheels, LICENSE)

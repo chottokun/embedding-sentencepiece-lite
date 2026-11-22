@@ -43,7 +43,13 @@ def deploy_model(model_key: str, api: HfApi, username: str):
         if rel_root.startswith("ruri_v3_") or "__pycache__" in rel_root:
             continue
         for f in files:
-            if f.endswith(".pyc") or f == "model_fixed.onnx" or f == "ruri_v3_reranker_lite.py":
+            if (
+                f.endswith(".pyc")
+                or f.endswith(".onnx.data")
+                or f.endswith(".onnx_data")
+                or f == "model_fixed.onnx"
+                or f == "ruri_v3_reranker_lite.py"
+            ):
                 continue
             full_path = os.path.join(root, f)
             rel_path = os.path.relpath(full_path, target_dir)
@@ -55,8 +61,17 @@ def deploy_model(model_key: str, api: HfApi, username: str):
         folder_path=target_dir,
         repo_id=repo_id,
         repo_type="model",
-        commit_message=f"feat: add tokenizer.json (fast tokenizer) and update ruri-v3-{model_key} assets",
-        ignore_patterns=["ruri_v3_*/**", "__pycache__/**", "*.pyc", "model_fixed.onnx", "ruri_v3_reranker_lite.py"]
+        commit_message=f"chore: remove orphaned .onnx.data and update ruri-v3-{model_key} assets",
+        ignore_patterns=[
+            "ruri_v3_*/**",
+            "__pycache__/**",
+            "*.pyc",
+            "model_fixed.onnx",
+            "ruri_v3_reranker_lite.py",
+            "*.onnx.data",
+            "*.onnx_data",
+        ],
+        delete_patterns=["*.onnx.data", "*.onnx_data"],
     )
     print(f"\n【デプロイ完了】{repo_id} のアップロードが完了しました！ 🎉")
     print(f"URL: https://huggingface.co/{repo_id}")

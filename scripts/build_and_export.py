@@ -17,6 +17,7 @@ import torch
 from onnxconverter_common import float16
 from transformers import AutoModel, AutoTokenizer
 from huggingface_hub import hf_hub_download
+from onnx_utils import cleanup_external_data, verify_inline_onnx
 
 SUPPORTED_MODELS = {
     "30m": "cl-nagoya/ruri-v3-30m",
@@ -112,6 +113,7 @@ def export_model(model_key: str, spm_to_fb_bin: str, wheel_path: str):
 
     dummy_inputs = tokenizer(["テストテキストです。"], return_tensors="pt")
     fp32_onnx_path = os.path.join(out_dir, "model.onnx")
+    cleanup_external_data(fp32_onnx_path)
 
     torch.onnx.export(
         model,
@@ -125,17 +127,19 @@ def export_model(model_key: str, spm_to_fb_bin: str, wheel_path: str):
             "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
         },
         opset_version=17,
-        do_constant_folding=True
+        do_constant_folding=True,
+        external_data=False,
     )
 
-    # PyTorch 2.14 Split 属性サニタイズ
+    # PyTorch 2.14 Split 属性サニタイズ (単一 ONNX ファイルとして保存し外部データ参照を禁止)
     fp32_model = onnx.load(fp32_onnx_path)
     for node in fp32_model.graph.node:
         if node.op_type == "Split":
             attrs_to_remove = [a for a in node.attribute if a.name == "num_outputs"]
             for a in attrs_to_remove:
                 node.attribute.remove(a)
-    onnx.save(fp32_model, fp32_onnx_path)
+    onnx.save(fp32_model, fp32_onnx_path, save_as_external_data=False)
+    verify_inline_onnx(fp32_onnx_path)
     print(f"FP32 ONNX ready: {fp32_onnx_path}")
 
     # 3. FP16 変換
@@ -146,7 +150,9 @@ def export_model(model_key: str, spm_to_fb_bin: str, wheel_path: str):
         disable_shape_infer=False
     )
     fp16_onnx_path = os.path.join(out_dir, "model_fp16.onnx")
-    onnx.save(fp16_model, fp16_onnx_path)
+    cleanup_external_data(fp16_onnx_path)
+    onnx.save(fp16_model, fp16_onnx_path, save_as_external_data=False)
+    verify_inline_onnx(fp16_onnx_path)
     print(f"FP16 ONNX ready: {fp16_onnx_path} ({os.path.getsize(fp16_onnx_path):,} bytes)")
 
     # 4. ラッパー & README 生成
