@@ -47,6 +47,7 @@ def deploy_model(model_key: str, api: HfApi, username: str):
                 f.endswith(".pyc")
                 or f.endswith(".onnx.data")
                 or f.endswith(".onnx_data")
+                or f.startswith("sentencepiece_lite-0.1.0-")
                 or f == "model_fixed.onnx"
                 or f == "ruri_v3_reranker_lite.py"
             ):
@@ -61,7 +62,7 @@ def deploy_model(model_key: str, api: HfApi, username: str):
         folder_path=target_dir,
         repo_id=repo_id,
         repo_type="model",
-        commit_message=f"fix: repair Cast node type mismatch in model_fp16.onnx and update ruri_v3_lite.py",
+        commit_message="feat: upgrade bundled wheel and model card to sentencepiece_lite v0.1.1 (cp311-abi3)",
         ignore_patterns=[
             "ruri_v3_*/**",
             "__pycache__/**",
@@ -71,6 +72,7 @@ def deploy_model(model_key: str, api: HfApi, username: str):
             "ruri_v3_reranker_lite.py",
             "*.onnx.data",
             "*.onnx_data",
+            "wheels/sentencepiece_lite-0.1.0-*.whl",
         ],
         delete_patterns=[
             "__pycache__/**",
@@ -79,6 +81,7 @@ def deploy_model(model_key: str, api: HfApi, username: str):
             "*.onnx.data",
             "*.onnx_data",
             "model_fixed.onnx",
+            "wheels/sentencepiece_lite-0.1.0-*.whl",
         ],
     )
     print(f"\n【デプロイ完了】{repo_id} のアップロードが完了しました！ 🎉")

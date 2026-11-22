@@ -38,11 +38,11 @@ Engineered strictly with **`sentencepiece_lite` + `onnxruntime` + `numpy`** — 
 
 ## 🚀 Installation
 
-End users **do not need PyTorch, Transformers, or C++ compilers**:
+End users **do not need PyTorch, Transformers, or C++ compilers** (the bundled `cp311-abi3` wheel works across Python 3.11 / 3.12 / 3.13 / 3.14+ on `manylinux_2_28_x86_64` Linux):
 
 ```bash
 # Install pre-built wheel and runtime dependencies
-pip install https://huggingface.co/Chottokun/ruri-v3-30m-lite/resolve/main/wheels/sentencepiece_lite-0.1.0-cp311-cp311-linux_x86_64.whl \
+pip install https://huggingface.co/Chottokun/ruri-v3-30m-lite/resolve/main/wheels/sentencepiece_lite-0.1.1-cp311-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
             onnxruntime numpy huggingface_hub
 
 # For GPU acceleration (CUDA)

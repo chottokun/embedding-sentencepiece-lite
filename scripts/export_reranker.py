@@ -109,10 +109,18 @@ def main():
     # LICENSE のコピー
     shutil.copyfile("LICENSE", os.path.join(OUT_DIR, "LICENSE"))
 
-    # Wheels ディレクトリの配置
+    # Wheels ディレクトリの配置 (cp311-abi3 Wheel を優先して最新を選択)
     os.makedirs(os.path.join(OUT_DIR, "wheels"), exist_ok=True)
-    wheel_src = "./dist_assets/wheels/sentencepiece_lite-0.1.0-cp311-cp311-linux_x86_64.whl"
-    shutil.copyfile(wheel_src, os.path.join(OUT_DIR, "wheels", os.path.basename(wheel_src)))
+    global_wheels_dir = os.path.abspath("./dist_assets/wheels")
+    whl_candidates = sorted(
+        f for f in os.listdir(global_wheels_dir) if f.endswith(".whl")
+    )
+    if not whl_candidates:
+        raise FileNotFoundError(f"Wheel ファイルが見つかりません: {global_wheels_dir}")
+    abi3_candidates = [f for f in whl_candidates if "abi3" in f]
+    wheel_name = abi3_candidates[-1] if abi3_candidates else whl_candidates[-1]
+    wheel_src = os.path.join(global_wheels_dir, wheel_name)
+    shutil.copyfile(wheel_src, os.path.join(OUT_DIR, "wheels", wheel_name))
 
     print(f"\n✨ ruri-v3-reranker-310m の資材生成がすべて完了しました: {OUT_DIR}")
 

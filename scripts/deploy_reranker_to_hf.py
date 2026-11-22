@@ -44,7 +44,7 @@ def main():
         folder_path=SRC_DIR,
         repo_id=repo_id,
         repo_type="model",
-        commit_message="fix: repair Cast node type mismatch in model_fp16.onnx and update ruri_v3_reranker_lite.py",
+        commit_message="feat: upgrade bundled wheel and model card to sentencepiece_lite v0.1.1 (cp311-abi3)",
         ignore_patterns=[
             "__pycache__/**",
             "**/__pycache__/**",
@@ -54,6 +54,7 @@ def main():
             "model_clean.onnx",
             "model_pruned_16l.onnx",
             "model_pruned_16l-inferred.onnx",
+            "wheels/sentencepiece_lite-0.1.0-*.whl",
         ],
         delete_patterns=[
             "__pycache__/**",
@@ -61,6 +62,7 @@ def main():
             "*.pyc",
             "*.onnx.data",
             "*.onnx_data",
+            "wheels/sentencepiece_lite-0.1.0-*.whl",
         ],
     )
 
