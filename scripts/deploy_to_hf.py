@@ -61,17 +61,25 @@ def deploy_model(model_key: str, api: HfApi, username: str):
         folder_path=target_dir,
         repo_id=repo_id,
         repo_type="model",
-        commit_message=f"chore: remove orphaned .onnx.data and legacy model_fixed.onnx in ruri-v3-{model_key}",
+        commit_message=f"chore: remove orphaned artifacts (__pycache__, .pyc, .onnx.data, model_fixed.onnx) in ruri-v3-{model_key}",
         ignore_patterns=[
             "ruri_v3_*/**",
             "__pycache__/**",
+            "**/__pycache__/**",
             "*.pyc",
             "model_fixed.onnx",
             "ruri_v3_reranker_lite.py",
             "*.onnx.data",
             "*.onnx_data",
         ],
-        delete_patterns=["*.onnx.data", "*.onnx_data", "model_fixed.onnx"],
+        delete_patterns=[
+            "__pycache__/**",
+            "**/__pycache__/**",
+            "*.pyc",
+            "*.onnx.data",
+            "*.onnx_data",
+            "model_fixed.onnx",
+        ],
     )
     print(f"\n【デプロイ完了】{repo_id} のアップロードが完了しました！ 🎉")
     print(f"URL: https://huggingface.co/{repo_id}")

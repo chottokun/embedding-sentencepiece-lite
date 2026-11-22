@@ -47,6 +47,7 @@ def main():
         commit_message="chore: remove orphaned .onnx.data and update ruri-v3-reranker-310m assets",
         ignore_patterns=[
             "__pycache__/**",
+            "**/__pycache__/**",
             "*.pyc",
             "*.onnx.data",
             "*.onnx_data",
@@ -54,7 +55,13 @@ def main():
             "model_pruned_16l.onnx",
             "model_pruned_16l-inferred.onnx",
         ],
-        delete_patterns=["*.onnx.data", "*.onnx_data"],
+        delete_patterns=[
+            "__pycache__/**",
+            "**/__pycache__/**",
+            "*.pyc",
+            "*.onnx.data",
+            "*.onnx_data",
+        ],
     )
 
     print("\n" + "=" * 70)
