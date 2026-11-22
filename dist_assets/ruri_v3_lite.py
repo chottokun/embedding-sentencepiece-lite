@@ -15,6 +15,9 @@ BOS_ID = 1   # <s>
 EOS_ID = 2   # </s>
 PAD_ID = 3   # <pad>
 
+# モデルサイズ別の埋め込み次元数フォールバックマップ
+MODEL_DIMS = {"30m": 256, "70m": 384, "130m": 512, "310m": 768}
+
 def get_cuda_compute_capability() -> float:
     """CUDA ドライバ経由で GPU の Compute Capability を取得 (PyTorch 完全不要)"""
     try:
@@ -37,6 +40,13 @@ def get_cuda_compute_capability() -> float:
 
 class RuriV3Lite:
     """ruri-v3-30m 軽量推論クラス"""
+
+    @staticmethod
+    def _resolve_model_path(repo_id: str, model_dir: str, filename: str) -> str:
+        """ローカルディレクトリまたは Hugging Face Hub からモデルファイルパスを解決する"""
+        if model_dir and os.path.exists(model_dir):
+            return os.path.join(model_dir, filename)
+        return hf_hub_download(repo_id=repo_id, filename=filename)
 
     def __init__(
         self,
@@ -77,15 +87,14 @@ class RuriV3Lite:
 
         fb_filename = f"ruri_v3_{model_size}.spm.fb"
 
+        model_path = self._resolve_model_path(repo_id, model_dir, model_filename)
         if model_dir and os.path.exists(model_dir):
-            model_path = os.path.join(model_dir, model_filename)
             fb_path = os.path.join(model_dir, fb_filename)
             if not os.path.exists(fb_path):
                 fbs = [f for f in os.listdir(model_dir) if f.endswith(".spm.fb")]
                 if fbs:
                     fb_path = os.path.join(model_dir, fbs[0])
         else:
-            model_path = hf_hub_download(repo_id=repo_id, filename=model_filename)
             try:
                 fb_path = hf_hub_download(repo_id=repo_id, filename=fb_filename)
             except Exception:
@@ -94,7 +103,7 @@ class RuriV3Lite:
         # 3. SentencePiece Lite トークナイザーの初期化 (FlatBuffers, SBP並列対応)
         self.tokenizer = spl.FastSBPTokenizer(fb_path)
 
-        # 4. ONNX Runtime セッション初期化 (CUDA 失敗時は自動的に CPU へフォールバック)
+        # 4. ONNX Runtime セッション初期化 (CUDA 失敗時は FP32 に切り替えて CPU へフォールバック)
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
@@ -115,10 +124,18 @@ class RuriV3Lite:
                 print(f"[RuriV3Lite] InferenceSession 初期化完了 (プロバイダ: {active_provider})")
             except Exception as e:
                 print(f"[RuriV3Lite] CUDA 初期化失敗 ({e}) -> CPUExecutionProvider にフォールバックします")
+                if model_filename != "model.onnx":
+                    model_filename = "model.onnx"
+                    model_path = self._resolve_model_path(repo_id, model_dir, model_filename)
                 self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
         else:
             self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
             print("[RuriV3Lite] InferenceSession 初期化完了 (プロバイダ: CPUExecutionProvider)")
+
+        # 出力テンソル形状から埋め込み次元数を取得 (動的軸等で非 int の場合はマップからフォールバック)
+        out_shape = self.session.get_outputs()[0].shape
+        last_dim = out_shape[-1] if out_shape else None
+        self.embedding_dim = last_dim if isinstance(last_dim, int) else MODEL_DIMS.get(model_size, 256)
 
     def encode(
         self,
@@ -137,13 +154,13 @@ class RuriV3Lite:
             normalize_embeddings: True の場合 L2 正規化を実行 (コサイン類似度用)
 
         Returns:
-            np.ndarray: shape (len(texts), 256) の埋め込みベクトル
+            np.ndarray: shape (len(texts), self.embedding_dim) の埋め込みベクトル
         """
         if isinstance(texts, str):
             texts = [texts]
 
         if len(texts) == 0:
-            return np.empty((0, 256), dtype=np.float32)
+            return np.empty((0, self.embedding_dim), dtype=np.float32)
 
         all_embeddings = []
 

@@ -61,7 +61,7 @@ def deploy_model(model_key: str, api: HfApi, username: str):
         folder_path=target_dir,
         repo_id=repo_id,
         repo_type="model",
-        commit_message=f"chore: remove orphaned artifacts (__pycache__, .pyc, .onnx.data, model_fixed.onnx) in ruri-v3-{model_key}",
+        commit_message=f"fix: repair Cast node type mismatch in model_fp16.onnx and update ruri_v3_lite.py",
         ignore_patterns=[
             "ruri_v3_*/**",
             "__pycache__/**",

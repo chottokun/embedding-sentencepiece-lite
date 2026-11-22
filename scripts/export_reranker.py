@@ -12,7 +12,7 @@ import torch
 import onnx
 from onnxconverter_common import float16
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from onnx_utils import cleanup_external_data, verify_inline_onnx
+from onnx_utils import cleanup_external_data, sanitize_fp16_cast_nodes, verify_inline_onnx
 
 MODEL_ID = "cl-nagoya/ruri-v3-reranker-310m"
 OUT_DIR = os.path.abspath("./dist_assets/ruri_v3_reranker_310m")
@@ -85,6 +85,9 @@ def main():
         keep_io_types=True,
         disable_shape_infer=False
     )
+    fixed_casts = sanitize_fp16_cast_nodes(fp16_model)
+    if fixed_casts:
+        print(f"  FP16 Cast ノード属性を {fixed_casts} 件補正しました")
     fp16_onnx_path = os.path.join(OUT_DIR, "model_fp16.onnx")
     cleanup_external_data(fp16_onnx_path)
     onnx.save(fp16_model, fp16_onnx_path, save_as_external_data=False)

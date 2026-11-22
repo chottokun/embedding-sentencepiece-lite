@@ -44,7 +44,7 @@ def main():
         folder_path=SRC_DIR,
         repo_id=repo_id,
         repo_type="model",
-        commit_message="chore: remove orphaned .onnx.data and update ruri-v3-reranker-310m assets",
+        commit_message="fix: repair Cast node type mismatch in model_fp16.onnx and update ruri_v3_reranker_lite.py",
         ignore_patterns=[
             "__pycache__/**",
             "**/__pycache__/**",

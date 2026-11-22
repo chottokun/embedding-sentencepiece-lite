@@ -48,6 +48,32 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
 class RuriV3RerankerLite:
     """ruri-v3-reranker-310m 超軽量リランカー推論クラス (Zero-Torch)"""
 
+    @staticmethod
+    def _resolve_model_path(repo_id: str, model_dir: Optional[str], filename: str) -> str:
+        """ローカルディレクトリまたは Hugging Face Hub からモデルファイルパスを解決する (Gzip 透過展開対応)"""
+        if model_dir and os.path.exists(model_dir):
+            model_path = os.path.join(model_dir, filename)
+            # ローカルに .onnx がなく .onnx.gz がある場合は自動展開
+            if not os.path.exists(model_path) and os.path.exists(model_path + ".gz"):
+                print(f"[RuriV3RerankerLite] ローカルの {filename}.gz を自動展開中...")
+                with gzip.open(model_path + ".gz", "rb") as f_in, open(model_path, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            return model_path
+
+        # Hugging Face Hub からのダウンロード (Gzip 配信版があれば優先取得して透過解凍)
+        gz_filename = filename + ".gz"
+        try:
+            gz_download_path = hf_hub_download(repo_id=repo_id, filename=gz_filename)
+            target_onnx_path = os.path.splitext(gz_download_path)[0]
+            if not os.path.exists(target_onnx_path) or os.path.getsize(target_onnx_path) == 0:
+                print(f"[RuriV3RerankerLite] 透過的 Gzip 高速展開中 ({gz_filename} -> {filename})...")
+                with gzip.open(gz_download_path, "rb") as f_in, open(target_onnx_path, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            return target_onnx_path
+        except Exception:
+            # Gzip 版が存在しない場合は直接 .onnx をダウンロード
+            return hf_hub_download(repo_id=repo_id, filename=filename)
+
     def __init__(
         self,
         repo_id: str = "Chottokun/ruri-v3-reranker-310m-lite",
@@ -109,14 +135,8 @@ class RuriV3RerankerLite:
         # 2. FlatBuffers トークナイザー辞書ファイル名の決定
         fb_filename = "ruri_v3_reranker_310m.spm.fb"
 
+        model_path = self._resolve_model_path(repo_id, model_dir, model_filename)
         if model_dir and os.path.exists(model_dir):
-            model_path = os.path.join(model_dir, model_filename)
-            # ローカルに .onnx がなく .onnx.gz がある場合は自動展開
-            if not os.path.exists(model_path) and os.path.exists(model_path + ".gz"):
-                print(f"[RuriV3RerankerLite] ローカルの {model_filename}.gz を自動展開中...")
-                with gzip.open(model_path + ".gz", "rb") as f_in, open(model_path, "wb") as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-
             fb_path = os.path.join(model_dir, fb_filename)
             if not os.path.exists(fb_path):
                 # 代替候補探索
@@ -126,21 +146,6 @@ class RuriV3RerankerLite:
                 else:
                     raise FileNotFoundError(f"FlatBuffers 辞書 (*.spm.fb) が {model_dir} に見つかりません。")
         else:
-            # Hugging Face Hub からのダウンロード
-            # まず高速な Gzip 配信版 (*.onnx.gz) の存在を優先確認して透過解凍
-            gz_filename = model_filename + ".gz"
-            try:
-                gz_download_path = hf_hub_download(repo_id=repo_id, filename=gz_filename)
-                target_onnx_path = os.path.splitext(gz_download_path)[0]
-                if not os.path.exists(target_onnx_path) or os.path.getsize(target_onnx_path) == 0:
-                    print(f"[RuriV3RerankerLite] 透過的 Gzip 高速展開中 ({gz_filename} -> {model_filename})...")
-                    with gzip.open(gz_download_path, "rb") as f_in, open(target_onnx_path, "wb") as f_out:
-                        shutil.copyfileobj(f_in, f_out)
-                model_path = target_onnx_path
-            except Exception:
-                # Gzip 版が存在しない場合は直接 .onnx をダウンロード
-                model_path = hf_hub_download(repo_id=repo_id, filename=model_filename)
-
             try:
                 fb_path = hf_hub_download(repo_id=repo_id, filename=fb_filename)
             except Exception:
@@ -170,6 +175,18 @@ class RuriV3RerankerLite:
                 print(f"[RuriV3RerankerLite] InferenceSession 初期化完了 (プロバイダ: {active_provider})")
             except Exception as e:
                 print(f"[RuriV3RerankerLite] CUDA 初期化失敗 ({e}) -> CPUExecutionProvider にフォールバックします")
+                if model_filename == "model_fp16.onnx":
+                    if precision == "auto":
+                        if model_dir and os.path.exists(model_dir):
+                            int8_full_path = os.path.join(model_dir, "model_int8_full.onnx")
+                            has_int8_full = os.path.exists(int8_full_path) or os.path.exists(int8_full_path + ".gz")
+                            fallback_filename = "model_int8_full.onnx" if has_int8_full else "model.onnx"
+                        else:
+                            fallback_filename = "model_int8_full.onnx"
+                    else:
+                        fallback_filename = "model.onnx"
+                    model_filename = fallback_filename
+                    model_path = self._resolve_model_path(repo_id, model_dir, model_filename)
                 self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
         else:
             self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])

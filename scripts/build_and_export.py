@@ -17,7 +17,7 @@ import torch
 from onnxconverter_common import float16
 from transformers import AutoModel, AutoTokenizer
 from huggingface_hub import hf_hub_download
-from onnx_utils import cleanup_external_data, verify_inline_onnx
+from onnx_utils import cleanup_external_data, sanitize_fp16_cast_nodes, verify_inline_onnx
 
 SUPPORTED_MODELS = {
     "30m": "cl-nagoya/ruri-v3-30m",
@@ -149,6 +149,9 @@ def export_model(model_key: str, spm_to_fb_bin: str, wheel_path: str):
         keep_io_types=True,
         disable_shape_infer=False
     )
+    fixed_casts = sanitize_fp16_cast_nodes(fp16_model)
+    if fixed_casts:
+        print(f"  FP16 Cast ノード属性を {fixed_casts} 件補正しました")
     fp16_onnx_path = os.path.join(out_dir, "model_fp16.onnx")
     cleanup_external_data(fp16_onnx_path)
     onnx.save(fp16_model, fp16_onnx_path, save_as_external_data=False)

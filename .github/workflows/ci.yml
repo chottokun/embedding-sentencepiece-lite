@@ -162,7 +162,27 @@ jobs:
 
       - name: 軽量埋め込み推論テスト
         run: |
-          python -c "from dist_assets.ruri_v3_lite import RuriV3Lite; m = RuriV3Lite(repo_id='Chottokun/ruri-v3-30m-lite'); emb = m.encode(['CI test query']); print('Shape:', emb.shape); assert emb.shape == (1, 256)"
+          python -c '
+          import numpy as np
+          import onnxruntime as ort
+          from huggingface_hub import hf_hub_download
+          from dist_assets.ruri_v3_lite import RuriV3Lite
+
+          m = RuriV3Lite(repo_id="Chottokun/ruri-v3-30m-lite")
+          emb = m.encode(["CI test query"])
+          print("Shape:", emb.shape)
+          assert emb.shape == (1, 256)
+          assert m.encode([]).shape == (0, 256)
+
+          fp16_path = hf_hub_download("Chottokun/ruri-v3-30m-lite", "model_fp16.onnx")
+          sess = ort.InferenceSession(fp16_path, providers=["CPUExecutionProvider"])
+          out = sess.run(None, {
+              "input_ids": np.array([[1, 100, 2]], dtype=np.int64),
+              "attention_mask": np.array([[1, 1, 1]], dtype=np.int64),
+          })
+          assert out[0].shape == (1, 3, 256)
+          print("FP16 ORT load & run OK:", out[0].shape)
+          '
 
       - name: 軽量リランカー HF ダウンロード・推論テスト
         run: |
