@@ -2,15 +2,20 @@
 
 [English](README_en.md) | [日本語](README.md)
 
-A lightweight Japanese text embedding and cross-encoder reranker inference environment powered strictly by **`sentencepiece_lite` + `onnxruntime` + `numpy`**—completely free of `torch` and `transformers` runtime dependencies.
+A lightweight text embedding and cross-encoder reranker inference environment and asset generation factory powered strictly by **`sentencepiece_lite` + `onnxruntime` + `numpy`**—completely free of `torch` and `transformers` runtime dependencies.
 
-- **Target Models**: `cl-nagoya/ruri-v3` series (ModernBERT-Ja architecture)
+- **Supported Models**:
+  - **Ruri-v3 Series (ModernBERT-Ja architecture)**: High-performance Japanese embedding and reranker suite
+  - **multilingual-e5-base**: Multilingual dense text embeddings (MIT License)
+  - **embeddinggemma-2**: Text tower of Google's lightweight embedding model (Apache-2.0)
 - **Hugging Face Model Hub**:
   - **30m Embedding (256-dim)**: [`Chottokun/ruri-v3-30m-lite`](https://huggingface.co/Chottokun/ruri-v3-30m-lite)
   - **70m Embedding (384-dim)**: [`Chottokun/ruri-v3-70m-lite`](https://huggingface.co/Chottokun/ruri-v3-70m-lite)
   - **130m Embedding (512-dim)**: [`Chottokun/ruri-v3-130m-lite`](https://huggingface.co/Chottokun/ruri-v3-130m-lite)
   - **310m Embedding (768-dim)**: [`Chottokun/ruri-v3-310m-lite`](https://huggingface.co/Chottokun/ruri-v3-310m-lite)
   - **310m Reranker (Cross-Encoder)**: [`Chottokun/ruri-v3-reranker-310m-lite`](https://huggingface.co/Chottokun/ruri-v3-reranker-310m-lite)
+  - **multilingual-e5-base**: [`Chottokun/multilingual-e5-base-lite`](https://huggingface.co/Chottokun/multilingual-e5-base-lite) (Local / HF Hub distribution)
+  - **embeddinggemma-2**: [`Chottokun/embeddinggemma-2-lite`](https://huggingface.co/Chottokun/embeddinggemma-2-lite) (Local / HF Hub distribution)
 
 **Quick Links**: [Key Features](#key-features--technical-approach) | [Benchmark Highlights](#benchmark-highlights) | [Embedding Usage](#embedding-usage-encode) | [Reranker Usage](#reranker-usage-rerank) | [Development Workflow](#development-and-build-workflow) | [License & Citations](#license--redistribution-terms-apache-license-20)
 
@@ -24,7 +29,8 @@ A lightweight Japanese text embedding and cross-encoder reranker inference envir
 | **SentencePiece build dependencies** (Requires CMake, gcc, Python dev headers) | **Pre-compiled `abi3` Wheel distribution** | Single `cp311-abi3` Wheel (`.whl`) for Python 3.11+ distributed via GitHub Releases—one-line installation without a C++ compiler toolchain. |
 | **CPU tokenization bottlenecks** (GPU idle time during preprocessing) | **C++20 Zero-copy tokenization** | Leverages FlatBuffers (`mmap`) and Safe Boundary Pre-tokenization (SBP), completing tokenization in ~3.4 µs per sentence. |
 | **FP16 performance degradation on legacy GPUs** (Pascal architecture) | **Hardware-adaptive automatic dispatch** | Dynamically checks GPU Compute Capability via `ctypes`. Automatically selects FP16 for CC $\ge 7.0$ (Turing/Ampere+) and FP32 for CC $< 7.0$ (Pascal) or CPU. |
-| **Numerical divergence in custom wrappers** | **Mathematical equivalence verified** | Cosine similarity of 1.0000 against official PyTorch outputs (Mean Pooling + L2 normalization) validated on reference datasets. |
+| **Numerical divergence in custom wrappers** | **Mathematical equivalence verified** | Cosine similarity of 1.0000 against official PyTorch outputs (Mean Pooling + L2 normalization) validated across all models. |
+| **Fully offline deployments** | **Local-first resolution** | Automatically resolves all assets strictly from local folder if present, operating with zero Hugging Face API calls under `HF_HUB_OFFLINE=1`. |
 
 ---
 
@@ -45,8 +51,8 @@ embedding-sentencepiece-lite/
 │   └── reranker_benchmark.md  # Detailed benchmark & architectural trade-off report for reranker
 ├── dist_assets/               # Deployment assets for Hugging Face Model Hub
 │   ├── README.md              # Model card for Hugging Face
-│   ├── ruri_v3_lite.py        # Embedding wrapper module (~190 lines, zero torch)
-│   ├── ruri_v3_reranker_lite.py # Reranker wrapper module (~310 lines, zero torch)
+│   ├── ruri_v3_lite.py        # Embedding wrapper module (zero torch, LiteEmbedder alias support)
+│   ├── ruri_v3_reranker_lite.py # Reranker wrapper module (zero torch)
 │   ├── ruri_v3_30m.spm.fb     # FlatBuffers-format tokenizer dictionary (4.57MB)
 │   ├── tokenizer.model        # Original SentencePiece model
 │   ├── model.onnx             # FP32 ONNX model
@@ -54,8 +60,9 @@ embedding-sentencepiece-lite/
 │   └── wheels/                # Pre-built wheels for sentencepiece_lite
 └── scripts/
     ├── verify_tokenizer.py    # Verify special tokens and tokenizer compatibility
-    ├── build_and_export.py    # Build wheels, convert FlatBuffers, and export ONNX models
-    ├── deploy_to_hf.py        # Secure deployment script for embedding models
+    ├── verify_lite_set.py     # Verify embedding precision and offline smoke execution
+    ├── build_and_export.py    # Multi-model wheel build, FlatBuffers conversion, and ONNX export
+    ├── deploy_to_hf.py        # Automated deployment to Hugging Face (multi-model support)
     ├── deploy_reranker_to_hf.py # Secure deployment script for reranker model
     ├── test_inference.py      # Verification of mathematical equivalence with PyTorch
     ├── test_reranker_robustness.py # Automated edge-case & robustness test suite for reranker
@@ -115,23 +122,25 @@ uv pip install onnxruntime-gpu
 
 ### 2. Inference Code
 
+Use the generic `LiteEmbedder` (or `RuriV3Lite`). With `encode_query` and `encode_passages`, model-specific prefixes (such as Ruri's `検索クエリ: `, E5's `query: `, or Gemma 2's `task: search result | query: `) are automatically applied. Passing a local folder enables **fully offline execution**:
+
 ```python
-from ruri_v3_lite import RuriV3Lite
+from ruri_v3_lite import LiteEmbedder
 import numpy as np
 
 # Automatically loads FP16 on modern GPUs (CC >= 7.0) and FP32 on CPU / Pascal GPUs
-model = RuriV3Lite(repo_id="Chottokun/ruri-v3-30m-lite")
+model = LiteEmbedder(repo_id="Chottokun/ruri-v3-30m-lite")
+# model = LiteEmbedder(model_dir="./dist_assets")  # 100% offline execution
 
-# Formatted with official ruri-v3 task prefixes
-queries = ["検索クエリ: 日本の首都はどこですか？"]
+queries = ["日本の首都はどこですか？"]
 documents = [
-    "文章: 日本の首都は東京都です。",
-    "文章: 大阪は関西地方の主要都市です。"
+    "日本の首都は東京都です。",
+    "大阪は関西地方の主要都市です。"
 ]
 
-# Generate normalized embeddings (shape: (N, 256))
-q_emb = model.encode(queries)
-d_emb = model.encode(documents)
+# Generate normalized embeddings with automatic prefix routing
+q_emb = model.encode_query(queries)
+d_emb = model.encode_passages(documents)
 
 # Cosine similarity via dot product of L2-normalized vectors
 similarities = np.dot(q_emb, d_emb.T)[0]
@@ -207,12 +216,21 @@ uv run python scripts/verify_tokenizer.py
 
 ### 3. Asset Build & Model Export
 ```bash
-uv run python scripts/build_and_export.py
+# Build specific ruri-v3 model
+uv run python scripts/build_and_export.py --model 70m
+
+# Build multilingual-e5-base or embeddinggemma-2
+uv run python scripts/build_and_export.py --model e5-base
+uv run python scripts/build_and_export.py --model gemma2 --out-root ~/lite_factory_outputs
 ```
 
-### 4. Mathematical Equivalence Verification
+### 4. Mathematical Equivalence & Offline Smoke Testing
 ```bash
-uv run python scripts/test_inference.py
+# Verify PyTorch equivalence on ruri-v3
+uv run python scripts/test_inference.py --model 70m
+
+# Verify precision and fully offline execution on any generated lite set
+uv run python scripts/verify_lite_set.py --model-dir ./dist_assets/ruri_v3_70m --base-model cl-nagoya/ruri-v3-70m
 ```
 
 ### 5. Reranker Robustness & Edge-Case Testing
@@ -225,8 +243,10 @@ uv run python scripts/test_reranker_robustness.py
 cp .env.example .env
 # Edit .env with HF_TOKEN and HF_USERNAME
 
-# Deploy embedding models
-uv run python scripts/deploy_to_hf.py --model 30m
+# Deploy embedding models (30m, 70m, 130m, 310m, e5-base, gemma2)
+uv run python scripts/deploy_to_hf.py --model 70m
+uv run python scripts/deploy_to_hf.py --model e5-base
+uv run python scripts/deploy_to_hf.py --model gemma2 --out-root ~/lite_factory_outputs
 
 # Deploy reranker model
 uv run python scripts/deploy_reranker_to_hf.py
@@ -256,13 +276,23 @@ This repository and its distributed assets are licensed under the **Apache Licen
   - Converted SentencePiece vocabulary to FlatBuffers serialization (`.spm.fb`).
   - Implemented standalone zero-torch inference wrappers (`ruri_v3_lite.py`, `ruri_v3_reranker_lite.py`).
 
-### 2. Tokenizer Core (SentencePiece Lite)
+### 2. Multilingual & Cross-Architecture Models (multilingual-e5 / embeddinggemma)
+- **multilingual-e5-base**:
+  - **Author**: Microsoft Corporation
+  - **License**: [MIT License](https://opensource.org/licenses/MIT) (Copyright (c) Microsoft Corporation)
+  - **Modifications**: Converted to FP32/FP16 ONNX, permuted embedding rows to SentencePiece native ID space, and baked explicit `position_ids` calculation into graph.
+- **embeddinggemma-2**:
+  - **Author**: Google LLC
+  - **License**: [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0) (Copyright 2025 Google LLC)
+  - **Modifications**: Extracted language model text tower (`language_model`), converted to FP32/FP16 ONNX, converted vocabulary to FlatBuffers.
+
+### 3. Tokenizer Core (SentencePiece Lite)
 - **Library**: [Google SentencePiece Lite](https://google.github.io/sentencepiece/lite/)
 - **Repository**: [github.com/google/sentencepiece](https://github.com/google/sentencepiece)
 - **Copyright**: Copyright 2018 Google LLC
 - **License**: [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)
 
-### 3. Citations
+### 4. Citations
 
 #### Ruri (Embedding & Reranker Models)
 ```bibtex

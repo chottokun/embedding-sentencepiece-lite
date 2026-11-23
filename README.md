@@ -2,15 +2,20 @@
 
 [English](README_en.md) | [日本語](README.md)
 
-PyTorch や Transformers に依存せず、**`sentencepiece_lite` + `onnxruntime` + `numpy`** の軽量な依存関係のみで動作する日本語テキスト埋め込み（Embedding）およびリランカー（Cross-Encoder）推論環境です。
+PyTorch や Transformers に依存せず、**`sentencepiece_lite` + `onnxruntime` + `numpy`** の軽量な依存関係のみで動作するテキスト埋め込み（Embedding）およびリランカー（Cross-Encoder）推論環境・アセット生成ファクトリです。
 
-- **ターゲットモデル**: `cl-nagoya/ruri-v3` シリーズ（ModernBERT-Ja アーキテクチャ）
+- **対応モデル**:
+  - **Ruri-v3 シリーズ (ModernBERT-Ja アーキテクチャ)**: 日本語特化の高性能埋め込み & リランカー
+  - **multilingual-e5-base**: 多言語対応の高精度テキスト埋め込み (MIT License)
+  - **embeddinggemma-2**: Google の最新軽量埋め込みモデルのテキスト塔 (Apache-2.0)
 - **Hugging Face モデルリポジトリ**:
   - **30m 埋め込み (256次元)**: [`Chottokun/ruri-v3-30m-lite`](https://huggingface.co/Chottokun/ruri-v3-30m-lite)
   - **70m 埋め込み (384次元)**: [`Chottokun/ruri-v3-70m-lite`](https://huggingface.co/Chottokun/ruri-v3-70m-lite)
   - **130m 埋め込み (512次元)**: [`Chottokun/ruri-v3-130m-lite`](https://huggingface.co/Chottokun/ruri-v3-130m-lite)
   - **310m 埋め込み (768次元)**: [`Chottokun/ruri-v3-310m-lite`](https://huggingface.co/Chottokun/ruri-v3-310m-lite)
   - **310m リランカー (Cross-Encoder)**: [`Chottokun/ruri-v3-reranker-310m-lite`](https://huggingface.co/Chottokun/ruri-v3-reranker-310m-lite)
+  - **multilingual-e5-base**: [`Chottokun/multilingual-e5-base-lite`](https://huggingface.co/Chottokun/multilingual-e5-base-lite) (ローカル/HF配布対応)
+  - **embeddinggemma-2**: [`Chottokun/embeddinggemma-2-lite`](https://huggingface.co/Chottokun/embeddinggemma-2-lite) (ローカル/HF配布対応)
 
 **ナビゲーション**: [特徴と技術的アプローチ](#技術的アプローチと解決する課題) | [性能評価要約](#性能評価要約) | [埋め込みの利用方法](#埋め込みモデルの利用方法encode) | [リランカーの利用方法](#リランカーの利用方法rerank) | [開発・検証手順](#開発検証ビルド手順開発者向け) | [ライセンス・帰属表示](#ライセンス再配布条件-apache-license-20)
 
@@ -24,7 +29,8 @@ PyTorch や Transformers に依存せず、**`sentencepiece_lite` + `onnxruntime
 | **SentencePiece のビルド環境依存**<br>（CMake/gcc等のコンパイルが必要） | **事前ビルド済み `abi3` Wheel の提供** | Python 3.11+ 共通の単一 `cp311-abi3` Wheel（`.whl`）を GitHub Releases で提供し、C++ コンパイル不要で即時導入可能。 |
 | **前処理（トークナイズ）の遅延**<br>（GPUが遊休する要因） | **C++20 によるゼロコピー前処理** | FlatBuffers（`mmap`）および Safe Boundary Pre-tokenization（SBP）により、1文あたり約 3.4 µs で処理。 |
 | **旧世代 GPU での FP16 遅延**<br>（Pascal 世代等の制約） | **ハードウェア適応型自動切り替え** | `ctypes` で GPU Compute Capability を判定。7.0 以上は FP16、7.0 未満または CPU は FP32 を自動選択。 |
-| **自作ラッパーによる数値乖離の懸念** | **数学的等価性の検証済み** | PyTorch 公式出力（Mean Pooling + L2正規化）とのコサイン類似度 1.0000 を実機検証。 |
+| **自作ラッパーによる数値乖離の懸念** | **数学的等価性の検証済み** | PyTorch 公式出力（Mean Pooling + L2正規化）とのコサイン類似度 1.0000 を全モデルで実機検証。 |
+| **完全オフライン環境での稼働** | **ローカル優先（Local-first）解決** | 明示指定ディレクトリや配布フォルダ内に資産があれば、`HF_HUB_OFFLINE=1` 下でも Hub API を一切呼ばずに完全オフライン稼働。 |
 
 ---
 
@@ -45,7 +51,7 @@ embedding-sentencepiece-lite/
 │   └── reranker_benchmark.md  # リランカーモデルの性能評価・トレードオフ考察レポート
 ├── dist_assets/               # 配布用資産 (Hugging Face リポジトリ配信用)
 │   ├── README.md              # Hugging Face モデルカード
-│   ├── ruri_v3_lite.py        # 埋め込み推論ラッパー (PyTorch非依存, 約190行)
+│   ├── ruri_v3_lite.py        # 埋め込み推論ラッパー (PyTorch非依存, LiteEmbedder別名対応)
 │   ├── ruri_v3_reranker_lite.py # リランカー推論ラッパー (PyTorch非依存, 約310行)
 │   ├── ruri_v3_30m.spm.fb     # FlatBuffers 形式トークナイザー辞書 (4.57MB)
 │   ├── tokenizer.model        # 元の SentencePiece 辞書
@@ -54,8 +60,9 @@ embedding-sentencepiece-lite/
 │   └── wheels/                # 事前ビルド済み sentencepiece_lite wheel
 └── scripts/
     ├── verify_tokenizer.py    # トークナイザー仕様および特殊トークン ID 検証
-    ├── build_and_export.py    # Wheel ビルド、FlatBuffers 変換、ONNX エクスポート
-    ├── deploy_to_hf.py        # Hugging Face への埋め込みモデル自動デプロイ
+    ├── verify_lite_set.py     # 埋め込み精度・完全オフライン実行スモーク検査
+    ├── build_and_export.py    # マルチモデル対応 Wheel ビルド、FlatBuffers 変換、ONNX エクスポート
+    ├── deploy_to_hf.py        # Hugging Face への埋め込みモデル自動デプロイ (マルチモデル対応)
     ├── deploy_reranker_to_hf.py # Hugging Face へのリランカー自動デプロイ
     ├── test_inference.py      # PyTorch 公式出力との数学的等価性検証
     ├── test_reranker_robustness.py # リランカーの境界値・頑健性自動テストスイート
@@ -115,23 +122,26 @@ uv pip install onnxruntime-gpu
 
 ### 2. 推論コード
 
+汎用エイリアス `LiteEmbedder`（または `RuriV3Lite`）を使用します。`encode_query` / `encode_passages` を用いることで、モデル固有の接頭辞（Ruri の `検索クエリ: `、E5 の `query: `、Gemma 2 の `task: search result | query: ` 等）が自動的に適用されます。また、ダウンロード済みモデルディレクトリを指定することで**完全オフライン推論**が可能です。
+
 ```python
-from ruri_v3_lite import RuriV3Lite
+from ruri_v3_lite import LiteEmbedder
 import numpy as np
 
-# インスタンス化 (ハードウェア世代に応じて FP16 / FP32 を自動選択)
-model = RuriV3Lite(repo_id="Chottokun/ruri-v3-30m-lite")
+# インスタンス化 (Hugging Face Hub または ローカル model_dir="." から読み込み)
+# ハードウェア世代に応じて FP16 / FP32 を自動選択
+model = LiteEmbedder(repo_id="Chottokun/ruri-v3-30m-lite")
+# model = LiteEmbedder(model_dir="./dist_assets")  # 完全オフライン実行
 
-# ruri-v3 推奨のプレフィックス付きテキスト
-queries = ["検索クエリ: 日本の首都はどこですか？"]
+queries = ["日本の首都はどこですか？"]
 documents = [
-    "文章: 日本の首都は東京都です。",
-    "文章: 大阪は関西地方の主要都市です。"
+    "日本の首都は東京都です。",
+    "大阪は関西地方の主要都市です。"
 ]
 
-# 埋め込みベクトルの取得 (L2正規化済み, shape: (N, 256))
-q_emb = model.encode(queries)
-d_emb = model.encode(documents)
+# プレフィックスを自動適用して埋め込みベクトルを取得 (L2正規化済み)
+q_emb = model.encode_query(queries)
+d_emb = model.encode_passages(documents)
 
 # コサイン類似度計算 (L2正規化済みの内積)
 similarities = np.dot(q_emb, d_emb.T)[0]
@@ -208,15 +218,24 @@ uv run python scripts/verify_tokenizer.py
 
 ### 3. 資産のビルドとエクスポート
 ```bash
-uv run python scripts/build_and_export.py
+# ruri-v3 シリーズの指定モデルをビルド
+uv run python scripts/build_and_export.py --model 70m
+
+# multilingual-e5-base や embeddinggemma-2 をビルド
+uv run python scripts/build_and_export.py --model e5-base
+uv run python scripts/build_and_export.py --model gemma2 --out-root ~/lite_factory_outputs
 ```
 > SentencePiece Lite の Wheel コンパイル、FlatBuffers 形式への変換、FP32/FP16 ONNX へのエクスポートを一括実行します。
 
-### 4. 推論精度の完全一致検証
+### 4. 推論精度の完全一致検証・オフラインスモーク検査
 ```bash
-uv run python scripts/test_inference.py
+# ruri-v3 シリーズの推論精度検証
+uv run python scripts/test_inference.py --model 70m
+
+# 生成済み lite セットの精度および完全オフライン動作スモーク検査
+uv run python scripts/verify_lite_set.py --model-dir ./dist_assets/ruri_v3_70m --base-model cl-nagoya/ruri-v3-70m
 ```
-> PyTorch 公式モデル出力と本実装の出力を照合し、コサイン類似度 0.9999 以上（実測 1.0000）を検証します。
+> PyTorch 公式モデル出力と本実装の出力を照合し、コサイン類似度 0.9999 以上（実測 1.0000）を検証するとともに、`HF_HUB_OFFLINE=1` での完全オフライン動作を確認します。
 
 ### 5. リランカーの頑健性テスト
 ```bash
@@ -234,8 +253,10 @@ cp .env.example .env
 
 指定モデルをアップロードします：
 ```bash
-# 埋め込みモデルのデプロイ
-uv run python scripts/deploy_to_hf.py --model 30m
+# 埋め込みモデルのデプロイ (30m, 70m, 130m, 310m, e5-base, gemma2)
+uv run python scripts/deploy_to_hf.py --model 70m
+uv run python scripts/deploy_to_hf.py --model e5-base
+uv run python scripts/deploy_to_hf.py --model gemma2 --out-root ~/lite_factory_outputs
 
 # リランカーモデルのデプロイ
 uv run python scripts/deploy_reranker_to_hf.py
@@ -265,7 +286,17 @@ uv run python scripts/deploy_reranker_to_hf.py
   - 公式 SentencePiece 辞書を SentencePiece Lite 用 FlatBuffers バイナリ (`.spm.fb`) に変換
   - PyTorch / Transformers 非依存の推論ラッパー (`ruri_v3_lite.py`, `ruri_v3_reranker_lite.py`) の新規実装
 
-### 2. トークナイザーコア (SentencePiece Lite)
+### 2. 多言語・他アーキテクチャモデル (multilingual-e5 / embeddinggemma)
+- **multilingual-e5-base**:
+  - **開発元**: Microsoft Corporation
+  - **ライセンス**: [MIT License](https://opensource.org/licenses/MIT) (Copyright (c) Microsoft Corporation)
+  - **改変内容**: ONNX (FP32/FP16) 変換、SentencePiece ネイティブ ID 空間への埋め込み置換および `position_ids` 明示計算グラフの焼き込み
+- **embeddinggemma-2**:
+  - **開発元**: Google LLC
+  - **ライセンス**: [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0) (Copyright 2025 Google LLC)
+  - **改変内容**: テキスト塔 (`language_model`) の抽出、ONNX (FP32/FP16) 変換、FlatBuffers 化
+
+### 3. トークナイザーコア (SentencePiece Lite)
 - **ライブラリ**: [Google SentencePiece Lite](https://google.github.io/sentencepiece/lite/)
 - **リポジトリ**: [github.com/google/sentencepiece](https://github.com/google/sentencepiece)
 - **権利表記**: Copyright 2018 Google LLC
