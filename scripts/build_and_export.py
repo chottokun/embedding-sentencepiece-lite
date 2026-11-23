@@ -608,7 +608,17 @@ UPSTREAM_CREDITS = {
     "embeddinggemma": {
         "copyright": "Copyright 2025 Google LLC",
         "license_url": "http://www.apache.org/licenses/LICENSE-2.0",
-        "citation": "",
+        "citation": """```bibtex
+@misc{embeddinggemma2_2026,
+    title={EmbeddingGemma 2: Unified and Efficient Multimodal Representations},
+    author={Schechter Vera, Henrique and Dua, Sahil and Team, EmbeddingGemma},
+    year={2026},
+    eprint={2610.37364},
+    archivePrefix={arXiv},
+    primaryClass={cs.LG},
+    url={https://arxiv.org/abs/2610.37364}
+}
+```""",
     },
 }
 
