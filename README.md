@@ -1,4 +1,4 @@
-# ruri_sentencepiece_lite
+# embedding-sentencepiece-lite
 
 [English](README_en.md) | [日本語](README.md)
 
@@ -31,7 +31,7 @@ PyTorch や Transformers に依存せず、**`sentencepiece_lite` + `onnxruntime
 ## ディレクトリ構成
 
 ```text
-ruri_sentencepiece_lite/
+embedding-sentencepiece-lite/
 ├── AGENTS.md                  # 厳格な開発制約・セキュリティ方針 (uv利用・秘密情報保護)
 ├── .gitignore                 # 巨大モデル重み・秘密情報・キャッシュの除外設定
 ├── .env.example               # 環境変数テンプレート (HF_TOKEN 等)
@@ -106,7 +106,7 @@ ruri_sentencepiece_lite/
 
 ```bash
 # 事前ビルド済み abi3 Wheel と推論ランタイムの導入 (CPU)
-uv pip install https://github.com/chottokun/ruri_with_sentencepiece_lite/releases/download/v0.1.1/sentencepiece_lite-0.1.1-cp311-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
+uv pip install https://github.com/chottokun/embedding-sentencepiece-lite/releases/download/v0.1.1/sentencepiece_lite-0.1.1-cp311-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
                onnxruntime numpy huggingface_hub
 
 # GPU 推論を行う場合 (CUDA)

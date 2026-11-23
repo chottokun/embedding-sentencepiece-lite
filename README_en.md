@@ -1,4 +1,4 @@
-# ruri_sentencepiece_lite
+# embedding-sentencepiece-lite
 
 [English](README_en.md) | [日本語](README.md)
 
@@ -31,7 +31,7 @@ A lightweight Japanese text embedding and cross-encoder reranker inference envir
 ## Repository Structure
 
 ```text
-ruri_sentencepiece_lite/
+embedding-sentencepiece-lite/
 ├── AGENTS.md                  # Strict engineering constraints & security policies (uv, secret protection)
 ├── .gitignore                 # Exclusion rules for large binaries, model weights, and cache dirs
 ├── .env.example               # Template for environment variables (HF_TOKEN, etc.)
@@ -106,7 +106,7 @@ For full experimental setups, profile breakdowns, and trade-off analyses, please
 
 ```bash
 # Install pre-built abi3 wheel and runtime dependencies (CPU)
-uv pip install https://github.com/chottokun/ruri_with_sentencepiece_lite/releases/download/v0.1.1/sentencepiece_lite-0.1.1-cp311-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
+uv pip install https://github.com/chottokun/embedding-sentencepiece-lite/releases/download/v0.1.1/sentencepiece_lite-0.1.1-cp311-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
                onnxruntime numpy huggingface_hub
 
 # For GPU acceleration (CUDA)
