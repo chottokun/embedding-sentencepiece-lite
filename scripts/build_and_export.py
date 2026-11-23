@@ -279,7 +279,7 @@ def export_model(model_key: str, spm_to_fb_bin: str, wheel_path: str, out_root: 
     print(f"  処理開始: {repo_id} ({model_key})")
     print(f"==================================================")
 
-    base_out_dir = os.path.abspath(out_root) if out_root else BASE_DIST_DIR
+    base_out_dir = os.path.abspath(os.path.expanduser(out_root)) if out_root else BASE_DIST_DIR
     out_dir = os.path.join(base_out_dir, cfg["out_dirname"])
     os.makedirs(out_dir, exist_ok=True)
     wheels_sub_dir = os.path.join(out_dir, "wheels")
@@ -649,6 +649,8 @@ SOFTWARE.
 def build_generic_readme(model_key: str, cfg: dict, wheel_path: str, lite_config: dict, permuted: bool) -> str:
     repo_id = cfg["repo_id"]
     display = cfg["display_name"]
+    hf_username = os.environ.get("HF_USERNAME") or "Chottokun"
+    hf_repo_id = f"{hf_username}/{display}-lite"
     credits = UPSTREAM_CREDITS.get(cfg["family"], {})
     license_name = "MIT License" if cfg["license"] == "mit" else "Apache License, Version 2.0"
 
@@ -690,7 +692,9 @@ tags:
 ## インストール手順
 
 ```bash
-pip install wheels/{os.path.basename(wheel_path)} onnxruntime numpy huggingface_hub
+pip install https://huggingface.co/{hf_repo_id}/resolve/main/wheels/{os.path.basename(wheel_path)} onnxruntime numpy huggingface_hub
+# ローカルの wheel を使う場合:
+# pip install wheels/{os.path.basename(wheel_path)} onnxruntime numpy huggingface_hub
 ```
 
 ## クイックスタート
@@ -699,7 +703,9 @@ pip install wheels/{os.path.basename(wheel_path)} onnxruntime numpy huggingface_
 from lite_embed import LiteEmbedder
 import numpy as np
 
-model = LiteEmbedder(model_dir=".")  # このディレクトリを指定
+# Hugging Face Hub からモデルを取得して初期化 (ローカルディレクトリを使う場合は model_dir="." を指定)
+model = LiteEmbedder(repo_id="{hf_repo_id}")
+# model = LiteEmbedder(model_dir=".")
 
 q_emb = model.encode_query(["日本の首都はどこですか？"])
 d_emb = model.encode_passages([
