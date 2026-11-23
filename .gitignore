@@ -68,6 +68,8 @@ dist_assets/tokenizer.model
 dist_assets/tokenizer.json
 dist_assets/tokenizer_config.json
 dist_assets/ruri_v3_*/
+dist_assets/multilingual_e5_base/
+dist_assets/embeddinggemma_2/
 build_spm/
 
 # Hugging Face cache
