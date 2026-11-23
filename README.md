@@ -95,7 +95,22 @@ embedding-sentencepiece-lite/
 > - **WebAPI・検索・サーバーレス環境（Batch 1〜8）**: Python ディスパッチコストが小さく、インストール容量とコールドスタートを大幅に抑制できる本実装が適しています。
 > - **オフライン一括バッチ処理（Batch 32〜64）**: Intel MKL 最適化カーネルを持つ PyTorch (LibTorch) がスループット面で約 1.25〜1.3 倍優位となります。
 
-### 3. パッケージ容量・メモリ消費量（実測値）
+### 3. マルチモデル GPU (Colab Tesla T4) スループット・精度検証 (全6モデル)
+Google Colab Tesla T4 (CC 7.5, VRAM 15GB) 実機における日英混在128文の End-to-End スループット（文/秒、括弧内は ms/文）および参照実装（`torch` + `sentence-transformers` FP32）とのコサイン類似度です。
+
+| モデル | 次元 | lite GPU (b1) | lite GPU (b32) | 参照 torch GPU (b32) | GPU b32 速度比 | 参照との cos 一致度 (min) | GPU 既定精度ポリシー |
+|---|---|---|---|---|---|---|---|
+| **ruri-v3-30m** | 256 | 295.1 (3.39 ms) | **6,822.8 (0.15 ms)** | 2,661.9 (0.38 ms) | **2.6x 高速** | 1.000000 | FP16 (`CC >= 7.0`) |
+| **ruri-v3-70m** | 384 | 251.8 (3.97 ms) | **3,657.4 (0.27 ms)** | 1,639.4 (0.61 ms) | **2.2x 高速** | 0.999999 | FP16 (`CC >= 7.0`) |
+| **ruri-v3-130m** | 512 | 174.6 (5.73 ms) | **1,768.4 (0.57 ms)** | 744.7 (1.34 ms) | **2.4x 高速** | 0.999996 | FP16 (`CC >= 7.0`) |
+| **ruri-v3-310m** | 768 | 141.0 (7.09 ms) | **851.3 (1.17 ms)** | 283.3 (3.53 ms) | **3.0x 高速** | 0.999993 | FP16 (`CC >= 7.0`) |
+| **multilingual-e5-base** | 768 | 294.4 (3.40 ms) | **2,213.3 (0.45 ms)** | 776.6 (1.29 ms) | **2.9x 高速** | 0.999990 | FP16 (`CC >= 7.0`) |
+| **embeddinggemma-2** | 768 | 63.1 (15.85 ms) | **729.3 (1.37 ms)** | 334.5 (2.99 ms) | **2.2x 高速** | **1.000000** (FP32) | **FP32 固定 (`gpu_precision=fp32`)** |
+
+> **モデル別 GPU 精度ポリシー (`gpu_precision` / `allow_fp16`)**:
+> `embeddinggemma-2` は活性値のダイナミックレンジが広く、T4 等の GPU で IEEE FP16 実行すると `cos = 0.870` まで劣化することが実機検証で確認されたため、`lite_config.json` で `"gpu_precision": "fp32"` (`"allow_fp16": false`) を設定しています。これにより、`LiteEmbedder` は CC 7.0 以上の GPU でも自動的に `model.onnx`（FP32）を選択し、`cos = 1.000000` の完全な精度を維持します。
+
+### 4. パッケージ容量・メモリ消費量（実測値）
 | 評価項目 | 従来の標準構成 (PyTorch + Transformers) | 本実装 (Zero-Torch 構成) | 削減率 |
 |---|---|---|---|
 | **Python ランタイム総容量 (CPU)** | 約 1,240 MB (~1.2 GB) | **約 100 MB** | **約 92% 削減** |
@@ -217,25 +232,26 @@ uv run python scripts/verify_tokenizer.py
 > `<s>` (1), `</s>` (2), `<pad>` (3) の特殊トークン仕様および公式出力との一致を確認します。
 
 ### 3. 資産のビルドとエクスポート
+PyTorch 2.14 以降の ONNX エクスポータが要求する `onnxscript` および `sentencepiece` を含めて実行します：
 ```bash
-# ruri-v3 シリーズの指定モデルをビルド
-uv run python scripts/build_and_export.py --model 70m
+# ruri-v3 シリーズや multilingual-e5-base をビルド
+uv run --with "torch" --with "transformers" --with "onnx" --with "onnxscript" --with "onnxconverter-common" --with "sentencepiece" --with "build" --with "huggingface_hub" python scripts/build_and_export.py --model 70m
+uv run --with "torch" --with "transformers" --with "onnx" --with "onnxscript" --with "onnxconverter-common" --with "sentencepiece" --with "build" --with "huggingface_hub" python scripts/build_and_export.py --model e5-base
 
-# multilingual-e5-base や embeddinggemma-2 をビルド
-uv run python scripts/build_and_export.py --model e5-base
-uv run python scripts/build_and_export.py --model gemma2 --out-root ~/lite_factory_outputs
+# embeddinggemma-2 をビルド (embedding_gemma2 対応の最新 transformers を使用)
+uv run --with "git+https://github.com/huggingface/transformers.git" --with "torch" --with "onnx" --with "onnxscript" --with "onnxconverter-common" --with "sentencepiece" --with "build" --with "huggingface_hub" python scripts/build_and_export.py --model gemma2
 ```
 > SentencePiece Lite の Wheel コンパイル、FlatBuffers 形式への変換、FP32/FP16 ONNX へのエクスポートを一括実行します。
 
-### 4. 推論精度の完全一致検証・オフラインスモーク検査
+### 4. 推論精度（FP32 / FP16・精度ポリシー）の検証・オフラインスモーク検査
 ```bash
 # ruri-v3 シリーズの推論精度検証
-uv run python scripts/test_inference.py --model 70m
+uv run --with "torch" --with "transformers" --with "onnxruntime" --with "numpy" --with "huggingface_hub" python scripts/test_inference.py --model 70m
 
-# 生成済み lite セットの精度および完全オフライン動作スモーク検査
-uv run python scripts/verify_lite_set.py --model-dir ./dist_assets/ruri_v3_70m --base-model cl-nagoya/ruri-v3-70m
+# 生成済み lite セットの4段階検査 (1.トークナイザ 2.FP32精度 3.FP16精度&GPU精度ポリシー 4.完全オフライン実行)
+uv run --with "torch" --with "transformers" --with "sentence-transformers" --with "sentencepiece" python scripts/verify_lite_set.py --model-dir ./dist_assets/multilingual_e5_base --base-model intfloat/multilingual-e5-base
 ```
-> PyTorch 公式モデル出力と本実装の出力を照合し、コサイン類似度 0.9999 以上（実測 1.0000）を検証するとともに、`HF_HUB_OFFLINE=1` での完全オフライン動作を確認します。
+> PyTorch 公式モデル出力と本実装の出力（FP32 および FP16 経路・精度ポリシー）を照合するとともに、`HF_HUB_OFFLINE=1` での完全オフライン動作を確認します。
 
 ### 5. リランカーの頑健性テスト
 ```bash

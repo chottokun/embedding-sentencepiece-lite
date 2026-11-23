@@ -38,6 +38,9 @@ DEFAULT_CONFIG = {
     "pooling": "mean",
     "spm_fb": None,        # None の場合は従来の ruri_v3_<size>.spm.fb 命名規則で解決
     "embedding_dim": None,
+    "gpu_precision": "fp16",   # "fp16" (CC>=7.0でFP16選択) | "fp32" (GPUでもFP32固定)
+    "allow_fp16": True,
+    "fp16_cos_threshold": 0.995,
 }
 
 # モデルサイズ別の埋め込み次元数フォールバックマップ (ruri-v3 用)
@@ -113,38 +116,53 @@ class RuriV3Lite:
         repo_id: str = "Chottokun/ruri-v3-30m-lite",
         model_dir: str = None,
         force_fp32: bool = False,
+        force_fp16: bool = False,
         device: str = "auto"  # "auto", "cuda", "cpu"
     ):
         """
         初期化:
         model_dir が指定されている場合はローカルパスから読み込み、
-        未指定の場合は Hugging Face Hub (repo_id) からダウンロード・キャッシュします。
+        未指定の場合はローダー自身のディレクトリ、次に Hugging Face Hub (repo_id) から取得します。
         """
-        # 0. モデル固有設定 (特殊トークン・接頭辞・プーリング等) の読み込み
+        # 0. モデル固有設定 (特殊トークン・接頭辞・プーリング・精度ポリシー等) の読み込み
         self.config = self._load_config(repo_id, model_dir)
         self.bos_id = int(self.config["bos_id"])
         self.eos_id = int(self.config["eos_id"])
         self.pad_id = int(self.config["pad_id"])
         self.add_bos = bool(self.config["add_bos"])
         self.add_eos = bool(self.config["add_eos"])
+        self.allow_fp16 = bool(self.config.get("allow_fp16", True)) and (
+            self.config.get("gpu_precision", "fp16") == "fp16"
+        )
 
         available_providers = ort.get_available_providers()
         want_cuda = (device == "cuda") or (device == "auto" and "CUDAExecutionProvider" in available_providers)
 
-        # 1. ハードウェア世代に応じたモデル判定
-        if want_cuda and not force_fp32:
+        onnx_fp32_name = self.config.get("onnx") or "model.onnx"
+        onnx_fp16_name = self.config.get("onnx_fp16") or "model_fp16.onnx"
+
+        # 1. ハードウェア世代およびモデル別精度ポリシーに応じたモデル判定
+        if force_fp16 and not force_fp32:
+            model_filename = onnx_fp16_name
+            print("[RuriV3Lite] force_fp16=True -> FP16 モデルをロード")
+        elif want_cuda and not force_fp32 and self.allow_fp16:
             capability = get_cuda_compute_capability()
             # Turing (7.5) / Ampere (8.6: RTX 3060) 以降は FP16
             # Pascal (6.1: GTX 1080) 等は 7.0 未満のため FP32
             if capability >= 7.0:
-                model_filename = "model_fp16.onnx"
+                model_filename = onnx_fp16_name
                 print(f"[RuriV3Lite] GPU Capability {capability:.1f} >= 7.0 検知 -> FP16 モデルをロード")
             else:
-                model_filename = "model.onnx"
+                model_filename = onnx_fp32_name
                 print(f"[RuriV3Lite] GPU Capability {capability:.1f} < 7.0 検知 (GTX 1080等) -> FP32 モデルをロード")
+        elif want_cuda and not force_fp32 and not self.allow_fp16:
+            model_filename = onnx_fp32_name
+            print("[RuriV3Lite] モデル精度ポリシー (gpu_precision=fp32) に従い FP32 モデルをロード")
         else:
-            model_filename = "model.onnx"
+            model_filename = onnx_fp32_name
             print("[RuriV3Lite] CPU 実行または force_fp32=True -> FP32 モデルをロード")
+
+        self.model_filename = model_filename
 
         # 2. モデル & トークナイザーの取得
         model_size = "30m"
@@ -194,8 +212,9 @@ class RuriV3Lite:
                 print(f"[RuriV3Lite] InferenceSession 初期化完了 (プロバイダ: {active_provider})")
             except Exception as e:
                 print(f"[RuriV3Lite] CUDA 初期化失敗 ({e}) -> CPUExecutionProvider にフォールバックします")
-                if model_filename != "model.onnx":
-                    model_filename = "model.onnx"
+                if not force_fp16 and model_filename != onnx_fp32_name:
+                    model_filename = onnx_fp32_name
+                    self.model_filename = model_filename
                     model_path = self._resolve_model_path(repo_id, model_dir, model_filename)
                 self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
         else:

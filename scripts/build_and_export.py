@@ -44,6 +44,9 @@ def _ruri_cfg(key: str) -> dict:
         "pooling": "mean",
         "license": "apache-2.0",
         "export_target": "auto",
+        "gpu_precision": "fp16",
+        "allow_fp16": True,
+        "fp16_cos_threshold": 0.995,
     }
 
 
@@ -65,6 +68,9 @@ MODEL_CONFIGS = {
         "pooling": "mean",
         "license": "mit",
         "export_target": "auto",
+        "gpu_precision": "fp16",
+        "allow_fp16": True,
+        "fp16_cos_threshold": 0.995,
     },
     "gemma2": {
         "repo_id": "google/embeddinggemma-2",
@@ -83,6 +89,11 @@ MODEL_CONFIGS = {
         # マルチモーダル全体ではなくテキスト塔 (language_model) のみを書き出す。
         # テキスト入力に対する出力が全体モデルと完全一致することは検証済み。
         "export_target": "language_model",
+        # Gemma 系は活性値のダイナミックレンジが広く、GPU (T4 等) の FP16 実行で
+        # cos 0.870 まで劣化するため、既定の GPU 推論でも FP32 を強制する
+        "gpu_precision": "fp32",
+        "allow_fp16": False,
+        "fp16_cos_threshold": None,
     },
 }
 
@@ -445,6 +456,9 @@ def export_model(model_key: str, spm_to_fb_bin: str, wheel_path: str, out_root: 
         "embedding_dim": embedding_dim,
         "license": cfg["license"],
         "token_id_space": "sentencepiece",
+        "gpu_precision": cfg.get("gpu_precision", "fp16"),
+        "allow_fp16": cfg.get("allow_fp16", True),
+        "fp16_cos_threshold": cfg.get("fp16_cos_threshold", 0.995),
     }
     max_seq_length = _fetch_max_seq_length(repo_id)
     if max_seq_length:
@@ -730,6 +744,7 @@ print(f"クエリ vs 大阪: {{similarities[1]:.4f}}")
 
 - クエリ接頭辞: `{cfg['query_prefix']}`
 - 文書接頭辞: `{cfg['passage_prefix']}`
+- GPU 既定精度ポリシー (`gpu_precision`): `{lite_config.get('gpu_precision', 'fp16')}` (`allow_fp16={lite_config.get('allow_fp16', True)}`)
 - 特殊トークン (BOS={lite_config['bos_id']}, EOS={lite_config['eos_id']}, PAD={lite_config['pad_id']}) と付与条件は `lite_config.json` に記録されています。
 
 ---

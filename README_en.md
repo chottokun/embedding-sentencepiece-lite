@@ -95,7 +95,22 @@ For full experimental setups, profile breakdowns, and trade-off analyses, please
 > - **WebAPI, Search, & Serverless Services (Batch 1–8)**: Our implementation is recommended due to minimal Python dispatch overhead, ~90% smaller installation size, and faster container startup.
 > - **Offline Bulk Batch Processing (Batch 32–64)**: PyTorch (LibTorch) with Intel MKL optimized matrix kernels exhibits ~1.25–1.3x higher CPU throughput.
 
-### 3. Package Footprint & Memory Consumption
+### 3. Multi-Model GPU (Colab Tesla T4) Throughput & Precision Verification (All 6 Models)
+End-to-end throughput (sentences/sec, with ms/sentence in parentheses) on 128 mixed English/Japanese sentences and minimum cosine similarity against the reference implementation (`torch` + `sentence-transformers` FP32) measured on a Google Colab Tesla T4 GPU (CC 7.5, 15GB VRAM):
+
+| Model | Dim | lite GPU (b1) | lite GPU (b32) | Ref torch GPU (b32) | GPU b32 Speedup | Min Cosine vs Ref | Default GPU Precision Policy |
+|---|---|---|---|---|---|---|---|
+| **ruri-v3-30m** | 256 | 295.1 (3.39 ms) | **6,822.8 (0.15 ms)** | 2,661.9 (0.38 ms) | **2.6x Faster** | 1.000000 | FP16 (`CC >= 7.0`) |
+| **ruri-v3-70m** | 384 | 251.8 (3.97 ms) | **3,657.4 (0.27 ms)** | 1,639.4 (0.61 ms) | **2.2x Faster** | 0.999999 | FP16 (`CC >= 7.0`) |
+| **ruri-v3-130m** | 512 | 174.6 (5.73 ms) | **1,768.4 (0.57 ms)** | 744.7 (1.34 ms) | **2.4x Faster** | 0.999996 | FP16 (`CC >= 7.0`) |
+| **ruri-v3-310m** | 768 | 141.0 (7.09 ms) | **851.3 (1.17 ms)** | 283.3 (3.53 ms) | **3.0x Faster** | 0.999993 | FP16 (`CC >= 7.0`) |
+| **multilingual-e5-base** | 768 | 294.4 (3.40 ms) | **2,213.3 (0.45 ms)** | 776.6 (1.29 ms) | **2.9x Faster** | 0.999990 | FP16 (`CC >= 7.0`) |
+| **embeddinggemma-2** | 768 | 63.1 (15.85 ms) | **729.3 (1.37 ms)** | 334.5 (2.99 ms) | **2.2x Faster** | **1.000000** (FP32) | **FP32 Enforced (`gpu_precision=fp32`)** |
+
+> **Per-Model GPU Precision Policy (`gpu_precision` / `allow_fp16`)**:
+> Because `embeddinggemma-2` has a wide activation dynamic range that degrades to `cos = 0.870` under IEEE FP16 execution on T4 GPUs, its `lite_config.json` specifies `"gpu_precision": "fp32"` (`"allow_fp16": false`). `LiteEmbedder` automatically selects `model.onnx` (FP32) even on CC $\ge 7.0$ GPUs to guarantee `cos = 1.000000`.
+
+### 4. Package Footprint & Memory Consumption
 | Evaluation Metric | Standard PyTorch + Transformers | Zero-Torch Stack (Ours) | Reduction |
 |---|---|---|---|
 | **Python Runtime Footprint (CPU)** | ~1,240 MB (~1.2 GB) | **~100 MB** | **~92% Reduction** |
@@ -215,22 +230,23 @@ uv run python scripts/verify_tokenizer.py
 ```
 
 ### 3. Asset Build & Model Export
+Include `onnxscript` and `sentencepiece` required by the PyTorch 2.14+ ONNX exporter:
 ```bash
-# Build specific ruri-v3 model
-uv run python scripts/build_and_export.py --model 70m
+# Build ruri-v3 or multilingual-e5-base
+uv run --with "torch" --with "transformers" --with "onnx" --with "onnxscript" --with "onnxconverter-common" --with "sentencepiece" --with "build" --with "huggingface_hub" python scripts/build_and_export.py --model 70m
+uv run --with "torch" --with "transformers" --with "onnx" --with "onnxscript" --with "onnxconverter-common" --with "sentencepiece" --with "build" --with "huggingface_hub" python scripts/build_and_export.py --model e5-base
 
-# Build multilingual-e5-base or embeddinggemma-2
-uv run python scripts/build_and_export.py --model e5-base
-uv run python scripts/build_and_export.py --model gemma2 --out-root ~/lite_factory_outputs
+# Build embeddinggemma-2 (using latest transformers with embedding_gemma2 support)
+uv run --with "git+https://github.com/huggingface/transformers.git" --with "torch" --with "onnx" --with "onnxscript" --with "onnxconverter-common" --with "sentencepiece" --with "build" --with "huggingface_hub" python scripts/build_and_export.py --model gemma2
 ```
 
-### 4. Mathematical Equivalence & Offline Smoke Testing
+### 4. Mathematical Equivalence (FP32 / FP16 Gate) & Offline Smoke Testing
 ```bash
 # Verify PyTorch equivalence on ruri-v3
-uv run python scripts/test_inference.py --model 70m
+uv run --with "torch" --with "transformers" --with "onnxruntime" --with "numpy" --with "huggingface_hub" python scripts/test_inference.py --model 70m
 
-# Verify precision and fully offline execution on any generated lite set
-uv run python scripts/verify_lite_set.py --model-dir ./dist_assets/ruri_v3_70m --base-model cl-nagoya/ruri-v3-70m
+# Run 4-stage verification (1.Tokenizer 2.FP32 cos 3.FP16 route & GPU precision policy 4.Offline smoke)
+uv run --with "torch" --with "transformers" --with "sentence-transformers" --with "sentencepiece" python scripts/verify_lite_set.py --model-dir ./dist_assets/multilingual_e5_base --base-model intfloat/multilingual-e5-base
 ```
 
 ### 5. Reranker Robustness & Edge-Case Testing
