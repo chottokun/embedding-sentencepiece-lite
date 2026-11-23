@@ -8,8 +8,8 @@ lite_config.json が存在しない場合は ruri-v3 の従来動作
 (BOS=1 / EOS=2 / PAD=3、BOS+EOS 付与、Mean Pooling) にフォールバックするため、
 既存の ruri-v3-*-lite リポジトリでもそのまま動作する。
 
-ファイル解決はローカル優先: 明示指定の model_dir、次にローダー自身の
-ディレクトリの順に探し、ローカトリていれば Hugging Face Hub の
+ファイル解決はローカル優先: 明示指定の model_dir があればそのディレクトリのみ、
+未指定ならローダー自身のディレクトリを探し、ローカルにあれば Hugging Face Hub の
 API は一切呼ばない (HF_HUB_OFFLINE=1 でもそのまま動作する)。
 ローカルに無いファイルだけを Hub から取得する。
 """
@@ -64,14 +64,10 @@ def get_cuda_compute_capability() -> float:
         return 0.0
 
 def _local_search_dirs(model_dir: str = None) -> List[str]:
-    """モデルファイルのローカル探索先 (優先順): 明示指定ディレクトリ → ローダー自身のディレクトリ"""
-    dirs = []
+    """モデルファイルのローカル探索先: 明示指定があればそのディレクトリのみ、未指定ならローダー自身のディレクトリ"""
     if model_dir:
-        dirs.append(model_dir)
-    here = os.path.dirname(os.path.abspath(__file__))
-    if here not in dirs:
-        dirs.append(here)
-    return dirs
+        return [model_dir]
+    return [os.path.dirname(os.path.abspath(__file__))]
 
 
 class RuriV3Lite:
