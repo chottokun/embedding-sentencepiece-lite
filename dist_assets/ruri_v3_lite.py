@@ -1,8 +1,15 @@
-"""ruri-v3-30m 超軽量・高速推論ラッパーモジュール
+"""lite 埋め込み推論ラッパーモジュール (ruri-v3 初出・モデル汎用版)
 PyTorch / Transformers は完全不要。
 依存パッケージ: sentencepiece_lite, onnxruntime / onnxruntime-gpu, numpy, huggingface_hub
+
+モデル固有の情報 (特殊トークン ID・BOS/EOS 付与の有無・接頭辞・プーリング方式・
+.spm.fb ファイル名) は、モデルディレクトリ内の lite_config.json から読み込む。
+lite_config.json が存在しない場合は ruri-v3 の従来動作
+(BOS=1 / EOS=2 / PAD=3、BOS+EOS 付与、Mean Pooling) にフォールバックするため、
+既存の ruri-v3-*-lite リポジトリでもそのまま動作する。
 """
 import ctypes
+import json
 import os
 from typing import List, Union
 import numpy as np
@@ -10,12 +17,25 @@ import onnxruntime as ort
 import sentencepiece_lite as spl
 from huggingface_hub import hf_hub_download
 
-# ruri-v3-30m の確定済み特殊トークン ID
+# lite_config.json が無い場合のフォールバック (ruri-v3 の確定済み特殊トークン ID)
 BOS_ID = 1   # <s>
 EOS_ID = 2   # </s>
 PAD_ID = 3   # <pad>
 
-# モデルサイズ別の埋め込み次元数フォールバックマップ
+DEFAULT_CONFIG = {
+    "bos_id": BOS_ID,
+    "eos_id": EOS_ID,
+    "pad_id": PAD_ID,
+    "add_bos": True,
+    "add_eos": True,
+    "query_prefix": "検索クエリ: ",
+    "passage_prefix": "文章: ",
+    "pooling": "mean",
+    "spm_fb": None,        # None の場合は従来の ruri_v3_<size>.spm.fb 命名規則で解決
+    "embedding_dim": None,
+}
+
+# モデルサイズ別の埋め込み次元数フォールバックマップ (ruri-v3 用)
 MODEL_DIMS = {"30m": 256, "70m": 384, "130m": 512, "310m": 768}
 
 def get_cuda_compute_capability() -> float:
@@ -39,7 +59,7 @@ def get_cuda_compute_capability() -> float:
         return 0.0
 
 class RuriV3Lite:
-    """ruri-v3-30m 軽量推論クラス"""
+    """lite 埋め込み軽量推論クラス (lite_config.json 駆動・モデル汎用)"""
 
     @staticmethod
     def _resolve_model_path(repo_id: str, model_dir: str, filename: str) -> str:
@@ -47,6 +67,26 @@ class RuriV3Lite:
         if model_dir and os.path.exists(model_dir):
             return os.path.join(model_dir, filename)
         return hf_hub_download(repo_id=repo_id, filename=filename)
+
+    def _load_config(self, repo_id: str, model_dir: str) -> dict:
+        """lite_config.json を読み込み、DEFAULT_CONFIG とマージして返す"""
+        config = dict(DEFAULT_CONFIG)
+        cfg_path = None
+        if model_dir and os.path.exists(model_dir):
+            candidate = os.path.join(model_dir, "lite_config.json")
+            if os.path.exists(candidate):
+                cfg_path = candidate
+        else:
+            try:
+                cfg_path = hf_hub_download(repo_id=repo_id, filename="lite_config.json")
+            except Exception:
+                cfg_path = None
+        if cfg_path:
+            with open(cfg_path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            config.update({k: v for k, v in loaded.items() if v is not None})
+            print(f"[RuriV3Lite] lite_config.json を読み込みました: {cfg_path}")
+        return config
 
     def __init__(
         self,
@@ -60,6 +100,14 @@ class RuriV3Lite:
         model_dir が指定されている場合はローカルパスから読み込み、
         未指定の場合は Hugging Face Hub (repo_id) からダウンロード・キャッシュします。
         """
+        # 0. モデル固有設定 (特殊トークン・接頭辞・プーリング等) の読み込み
+        self.config = self._load_config(repo_id, model_dir)
+        self.bos_id = int(self.config["bos_id"])
+        self.eos_id = int(self.config["eos_id"])
+        self.pad_id = int(self.config["pad_id"])
+        self.add_bos = bool(self.config["add_bos"])
+        self.add_eos = bool(self.config["add_eos"])
+
         available_providers = ort.get_available_providers()
         want_cuda = (device == "cuda") or (device == "auto" and "CUDAExecutionProvider" in available_providers)
 
@@ -85,7 +133,7 @@ class RuriV3Lite:
                 model_size = s
                 break
 
-        fb_filename = f"ruri_v3_{model_size}.spm.fb"
+        fb_filename = self.config.get("spm_fb") or f"ruri_v3_{model_size}.spm.fb"
 
         model_path = self._resolve_model_path(repo_id, model_dir, model_filename)
         if model_dir and os.path.exists(model_dir):
@@ -132,10 +180,15 @@ class RuriV3Lite:
             self.session = ort.InferenceSession(model_path, sess_options, providers=["CPUExecutionProvider"])
             print("[RuriV3Lite] InferenceSession 初期化完了 (プロバイダ: CPUExecutionProvider)")
 
-        # 出力テンソル形状から埋め込み次元数を取得 (動的軸等で非 int の場合はマップからフォールバック)
+        # 出力テンソル形状から埋め込み次元数を取得 (動的軸等で非 int の場合は設定/マップからフォールバック)
         out_shape = self.session.get_outputs()[0].shape
         last_dim = out_shape[-1] if out_shape else None
-        self.embedding_dim = last_dim if isinstance(last_dim, int) else MODEL_DIMS.get(model_size, 256)
+        if isinstance(last_dim, int):
+            self.embedding_dim = last_dim
+        elif self.config.get("embedding_dim"):
+            self.embedding_dim = int(self.config["embedding_dim"])
+        else:
+            self.embedding_dim = MODEL_DIMS.get(model_size, 256)
 
     def encode(
         self,
@@ -162,6 +215,11 @@ class RuriV3Lite:
         if len(texts) == 0:
             return np.empty((0, self.embedding_dim), dtype=np.float32)
 
+        pooling = self.config.get("pooling", "mean")
+        if pooling != "mean":
+            raise ValueError(f"未対応のプーリング方式です: {pooling}")
+
+        reserve = (1 if self.add_bos else 0) + (1 if self.add_eos else 0)
         all_embeddings = []
 
         for i in range(0, len(texts), batch_size):
@@ -171,15 +229,14 @@ class RuriV3Lite:
             batch_ids = []
             for text in batch_texts:
                 tokens = self.tokenizer.encode(text)
-                # BOS (1) + tokens + EOS (2)
-                # max_length - 2 で切り詰め
-                clipped_tokens = tokens[:max(0, max_length - 2)]
-                ids = [BOS_ID] + clipped_tokens + [EOS_ID]
+                # BOS/EOS の付与は lite_config.json の設定に従う (モデル側定義が正)
+                clipped_tokens = tokens[:max(0, max_length - reserve)]
+                ids = ([self.bos_id] if self.add_bos else []) + clipped_tokens + ([self.eos_id] if self.add_eos else [])
                 batch_ids.append(ids)
 
             seq_len = max(len(ids) for ids in batch_ids)
-            # PAD_ID = 3 でパディング初期化
-            input_ids = np.full((len(batch_texts), seq_len), fill_value=PAD_ID, dtype=np.int64)
+            # pad_id でパディング初期化
+            input_ids = np.full((len(batch_texts), seq_len), fill_value=self.pad_id, dtype=np.int64)
             attention_mask = np.zeros((len(batch_texts), seq_len), dtype=np.int64)
 
             for b_idx, ids in enumerate(batch_ids):
@@ -193,7 +250,6 @@ class RuriV3Lite:
             })
 
             # Mean Pooling (attention_mask を考慮した加重平均)
-            # ruri-v3-30m 公式仕様: pooling_mode_mean_tokens = true
             hidden_states = outputs[0].astype(np.float32)
             mask_expanded = attention_mask[:, :, np.newaxis].astype(np.float32)
             sum_embeddings = np.sum(hidden_states * mask_expanded, axis=1)
@@ -208,3 +264,32 @@ class RuriV3Lite:
             all_embeddings.append(mean_pooled)
 
         return np.vstack(all_embeddings)
+
+    @staticmethod
+    def _apply_prefix(texts: Union[str, List[str]], prefix: str) -> Union[str, List[str]]:
+        if isinstance(texts, str):
+            return prefix + texts
+        return [prefix + t for t in texts]
+
+    def encode_query(
+        self,
+        texts: Union[str, List[str]],
+        **kwargs
+    ) -> np.ndarray:
+        """検索クエリ用: lite_config.json の query_prefix を付与して埋め込む"""
+        return self.encode(self._apply_prefix(texts, self.config.get("query_prefix", "")), **kwargs)
+
+    def encode_passages(
+        self,
+        texts: Union[str, List[str]],
+        **kwargs
+    ) -> np.ndarray:
+        """検索対象文書用: lite_config.json の passage_prefix を付与して埋め込む"""
+        return self.encode(self._apply_prefix(texts, self.config.get("passage_prefix", "")), **kwargs)
+
+    # 文書側エイリアス
+    encode_documents = encode_passages
+
+
+# モデル汎用の別名 (ruri 以外の lite セットではこちらを使う)
+LiteEmbedder = RuriV3Lite
