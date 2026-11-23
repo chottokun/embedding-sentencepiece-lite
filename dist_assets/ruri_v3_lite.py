@@ -7,6 +7,11 @@ PyTorch / Transformers は完全不要。
 lite_config.json が存在しない場合は ruri-v3 の従来動作
 (BOS=1 / EOS=2 / PAD=3、BOS+EOS 付与、Mean Pooling) にフォールバックするため、
 既存の ruri-v3-*-lite リポジトリでもそのまま動作する。
+
+ファイル解決はローカル優先: 明示指定の model_dir があればそのディレクトリのみ、
+未指定ならローダー自身のディレクトリを探し、ローカルにあれば Hugging Face Hub の
+API は一切呼ばない (HF_HUB_OFFLINE=1 でもそのまま動作する)。
+ローカルに無いファイルだけを Hub から取得する。
 """
 import ctypes
 import json
@@ -58,25 +63,40 @@ def get_cuda_compute_capability() -> float:
     except Exception:
         return 0.0
 
+def _local_search_dirs(model_dir: str = None) -> List[str]:
+    """モデルファイルのローカル探索先: 明示指定があればそのディレクトリのみ、未指定ならローダー自身のディレクトリ"""
+    if model_dir:
+        return [model_dir]
+    return [os.path.dirname(os.path.abspath(__file__))]
+
+
 class RuriV3Lite:
     """lite 埋め込み軽量推論クラス (lite_config.json 駆動・モデル汎用)"""
 
     @staticmethod
+    def _find_local(model_dir: str, filename: str) -> Union[str, None]:
+        """ローカル探索先からファイルを探し、存在すればそのパスを返す (Hub は呼ばない)"""
+        for d in _local_search_dirs(model_dir):
+            candidate = os.path.join(d, filename)
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    @staticmethod
     def _resolve_model_path(repo_id: str, model_dir: str, filename: str) -> str:
-        """ローカルディレクトリまたは Hugging Face Hub からモデルファイルパスを解決する"""
-        if model_dir and os.path.exists(model_dir):
-            return os.path.join(model_dir, filename)
+        """モデルファイルパスを解決する (ローカル優先・ローカルに無ければ Hub から取得)"""
+        local = RuriV3Lite._find_local(model_dir, filename)
+        if local:
+            return local
         return hf_hub_download(repo_id=repo_id, filename=filename)
 
     def _load_config(self, repo_id: str, model_dir: str) -> dict:
         """lite_config.json を読み込み、DEFAULT_CONFIG とマージして返す"""
         config = dict(DEFAULT_CONFIG)
-        cfg_path = None
-        if model_dir and os.path.exists(model_dir):
-            candidate = os.path.join(model_dir, "lite_config.json")
-            if os.path.exists(candidate):
-                cfg_path = candidate
-        else:
+        cfg_path = self._find_local(model_dir, "lite_config.json")
+        if cfg_path is None and not (model_dir and os.path.exists(model_dir)):
+            # 明示ディレクトリが指定されていない場合のみ Hub へ問い合わせる
+            # (ruri 従来動作の維持)。失敗すれば既定値フォールバック。
             try:
                 cfg_path = hf_hub_download(repo_id=repo_id, filename="lite_config.json")
             except Exception:
@@ -136,13 +156,15 @@ class RuriV3Lite:
         fb_filename = self.config.get("spm_fb") or f"ruri_v3_{model_size}.spm.fb"
 
         model_path = self._resolve_model_path(repo_id, model_dir, model_filename)
-        if model_dir and os.path.exists(model_dir):
-            fb_path = os.path.join(model_dir, fb_filename)
-            if not os.path.exists(fb_path):
-                fbs = [f for f in os.listdir(model_dir) if f.endswith(".spm.fb")]
-                if fbs:
-                    fb_path = os.path.join(model_dir, fbs[0])
-        else:
+        fb_path = self._find_local(model_dir, fb_filename)
+        if fb_path is None:
+            for d in _local_search_dirs(model_dir):
+                if os.path.isdir(d):
+                    fbs = sorted(f for f in os.listdir(d) if f.endswith(".spm.fb"))
+                    if fbs:
+                        fb_path = os.path.join(d, fbs[0])
+                        break
+        if fb_path is None:
             try:
                 fb_path = hf_hub_download(repo_id=repo_id, filename=fb_filename)
             except Exception:
